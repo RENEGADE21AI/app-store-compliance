@@ -7,15 +7,42 @@ set -uo pipefail
 # Reads all its input. grep -q stops early, and under pipefail its producer's SIGPIPE turns a match into a miss.
 grep_q() { grep "$@" >/dev/null; }
 
-HOOK_LOG="${HOME:-}/.claude/hooks/hook-log.sh"
-# shellcheck disable=SC1090
-[ -f "$HOOK_LOG" ] && source "$HOOK_LOG" 2>/dev/null || true
-log_err() { if type hlog_error >/dev/null 2>&1; then hlog_error "app-store-compliance-guard" "$@"; else echo "app-store-compliance-guard: $*" >&2; fi; }
+log_err() { printf 'app-store-compliance-guard: %s\n' "$*" >&2; }
+
+# Helpers belong to the playbook or its installed bundle. A guard copied to
+# .github/hooks must never search the app checkout for executable helpers.
+guard_bundle_file() {
+  local name="$1" invoked here parent candidate
+  local -a candidates=()
+  invoked="$(dirname -- "${BASH_SOURCE[0]}")"
+  case "/$invoked/" in */.[gG][iI][tT][hH][uU][bB]/hooks/*) return 1 ;; esac
+  here="$(cd -P -- "$invoked" && pwd -P)" || return 1
+  parent="$(dirname -- "$here")"
+  if [ "${here##*/}" = hooks ] && [ "${parent##*/}" = agent-os ]; then
+    candidates+=("$parent/../$name")
+  elif [ "${here##*/}" = hooks ]; then
+    case "${parent##*/}" in
+      .[gG][iI][tT][hH][uU][bB]) return 1 ;;
+      *) candidates+=("$parent/skills/app-store-compliance/$name") ;;
+    esac
+  fi
+  if [ -n "${HOME:-}" ]; then
+    candidates+=("$HOME/.agents/skills/app-store-compliance/$name")
+  fi
+  for candidate in "${candidates[@]}"; do
+    if [ -f "$candidate" ] && [ ! -L "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 CRIT=0; HIGH=0; MED=0; ANY_IOS=0; ANY_AND=0; ANY_NATIVE=0; ANY_RN=0; ANY_WEB=0; ANY_NEEDS_NATIVE=0; NATIVE_HINT=""; UNCHECKED=""; EXPO_READ=0
 FILELIST=""
+WORK_DIR=""
 REPORT=""; REPORT_DEGRADED=0
-cleanup() { [ -n "$FILELIST" ] && rm -f "$FILELIST" "$FILELIST.blob" "$FILELIST.manifest" "$FILELIST.code" "$FILELIST.impl" "$FILELIST.ship" 2>/dev/null; [ -n "$REPORT" ] && rm -f "$REPORT" 2>/dev/null; true; }
+cleanup() { [ -n "$FILELIST" ] && rm -f "$FILELIST" "$FILELIST.blob" "$FILELIST.manifest" "$FILELIST.code" "$FILELIST.impl" "$FILELIST.ship" 2>/dev/null; [ -n "$REPORT" ] && rm -f "$REPORT" 2>/dev/null; [ -n "$WORK_DIR" ] && rmdir "$WORK_DIR" 2>/dev/null; true; }
 trap cleanup EXIT
 
 # ----- resolve mode and project dir -----
@@ -55,8 +82,8 @@ payload_command() {
   if tool_ok jq -n true; then
     out="$(printf '%s' "$STDIN_JSON" | jq -rs 'if length != 1 then empty else .[0] | if type != "object" then empty else (.tool_name? // .toolName? // (if (.tool_info.command_line? | type) == "string" then "shell" else "Bash" end)) as $t | if (($t | type) != "string") or ((["Bash","PowerShell","bash","powershell","run_shell_command","shell","Execute","launch-process","execute_bash","execute_cmd","runInTerminal","run_in_terminal","run_terminal_command","run_terminal_cmd","monitor","execute_pwsh"] | any(. == $t)) | not) then empty else ((.tool_input.command? | strings) // (.toolInput.command? | strings) // (.toolArgs? | if type == "string" then (try fromjson catch null) else . end | if type == "object" then (.command? | strings) else empty end) // (.tool_info.command_line? | strings) // (.command? | strings) // empty) end end end' 2>/dev/null)" && { printf '%s' "$out"; return 0; }
   fi
-  if tool_ok python3 -c pass; then
-    out="$(printf '%s' "$STDIN_JSON" | python3 -c '
+  if tool_ok python3 -I -c pass; then
+    out="$(printf '%s' "$STDIN_JSON" | python3 -I -c '
 import json, sys
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
@@ -130,8 +157,8 @@ payload_cwd() {
     printf '%s' "$STDIN_JSON" | jq -rs 'if length == 1 and (.[0] | type) == "object" then .[0] | ((.cwd? | strings) // (.tool_info.cwd? | strings) // (.working_dir? | strings) // (.tool_input.cwd? | strings) // (.workspace_roots[0]? | strings) // empty) else empty end' 2>/dev/null
     return 0
   fi
-  if tool_ok python3 -c pass; then
-    printf '%s' "$STDIN_JSON" | python3 -c '
+  if tool_ok python3 -I -c pass; then
+    printf '%s' "$STDIN_JSON" | python3 -I -c '
 import json, sys
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
@@ -667,8 +694,10 @@ block_unchecked() {
   else cursor_reply 2; fi
   echo "$1 Blocked because APP_STORE_GUARD_BLOCK_UNCHECKED=1." >&2; exit 2
 }
-FILELIST="$(mktemp 2>/dev/null)" || FILELIST=""
-{ [ -n "$FILELIST" ] && : > "$FILELIST" 2>/dev/null; } || FILELIST="/tmp/ascg.$$"
+WORK_DIR="$(mktemp -d 2>/dev/null)" || WORK_DIR=""
+if [ -d "$WORK_DIR" ] && [ ! -L "$WORK_DIR" ]; then
+  FILELIST="$WORK_DIR/filelist"
+fi
 # No scan buffer means no scan. Say so rather than end CLEAR on an empty file list.
 if [ -z "$FILELIST" ] || ! : > "$FILELIST" 2>/dev/null; then
   NOTE="NOT CHECKED. The guard could not create its scan buffer in ${TMPDIR:-/tmp}, so nothing was scanned. Point TMPDIR at a writable folder and run it again."
@@ -1002,7 +1031,7 @@ if [ "$IOS_TARGET_ACTIVE" -eq 1 ]; then
   fi
 js_apple_login_started() {  # 0 if JS or TS code calls signInAsync( or performRequest({... Operation.LOGIN ...})
     [ -s "$FILELIST" ] || return 1
-    grep -E '[.][cm]?[jt]sx?$' "$FILELIST" | tr '\n' '\0' | xargs -0 python3 -c "$(cat <<'SIWAPY'
+    grep -E '[.][cm]?[jt]sx?$' "$FILELIST" | tr '\n' '\0' | xargs -0 python3 -I -c "$(cat <<'SIWAPY'
 import re
 import sys
 
@@ -1054,7 +1083,7 @@ SIWAPY
     local pf
     pf="$(grep '[.]xcodeproj/project[.]pbxproj$' "$FILELIST")"
     [ -n "$pf" ] || return 1
-    printf '%s\n' "$pf" | tr '\n' '\0' | xargs -0 python3 -c "$(cat <<'PBXPY'
+    printf '%s\n' "$pf" | tr '\n' '\0' | xargs -0 python3 -I -c "$(cat <<'PBXPY'
 import re
 import sys
 
@@ -1205,14 +1234,7 @@ PBXPY
   # A manifest that exists can still be internally inconsistent. Apple validates
   # these keys at upload and rejects by email (ITMS-91xxx) after processing, so
   # the binary installs from TestFlight and is still barred from review.
-  MANIFEST_VALIDATOR=""
-  for candidate in \
-    "$(dirname "$0")/../../scripts/validate-privacy-manifest.py" \
-    "$(dirname "$0")/../skills/app-store-compliance/scripts/validate-privacy-manifest.py" \
-    "${HOME:-}/.claude/skills/app-store-compliance/scripts/validate-privacy-manifest.py" \
-    "${HOME:-}/.agents/skills/app-store-compliance/scripts/validate-privacy-manifest.py"; do
-    [ -f "$candidate" ] && { MANIFEST_VALIDATOR="$candidate"; break; }
-  done
+  MANIFEST_VALIDATOR="$(guard_bundle_file scripts/validate-privacy-manifest.py)" || MANIFEST_VALIDATOR=""
   if [ -n "$MANIFEST_VALIDATOR" ] && command -v python3 >/dev/null 2>&1; then
     # Same exclusions as the source file list. A pod's manifest is the vendor's job, a Tests fixture never ships.
     : > "$FILELIST.manifest" 2>/dev/null || SCAN_ERROR="the privacy manifest results could not be written to $FILELIST.manifest"
@@ -1224,7 +1246,7 @@ PBXPY
       ${NESTED_PRUNE[@]+"${NESTED_PRUNE[@]}"} \) -prune \) \
       -o -name 'PrivacyInfo.xcprivacy' -print 2>/dev/null \
       | while IFS= read -r manifest; do
-          python3 "$MANIFEST_VALIDATOR" "$manifest" 2>/dev/null
+          python3 -I "$MANIFEST_VALIDATOR" "$manifest" 2>/dev/null
         done > "$FILELIST.manifest" 2>/dev/null || true
     if [ -s "$FILELIST.manifest" ]; then
       while IFS="$(printf '\t')" read -r sev id msg; do
@@ -1234,7 +1256,7 @@ PBXPY
     fi
     rm -f "$FILELIST.manifest" 2>/dev/null || true
   elif find_app 12 -name 'PrivacyInfo.xcprivacy' | grep . >/dev/null; then
-    finding medium "APPLE-MANIFEST-VALIDATOR-UNAVAILABLE" "Privacy manifests present but python3 or scripts/validate-privacy-manifest.py is missing, so their internals were not validated" "Install python3 and keep scripts/validate-privacy-manifest.py next to the guard, or run plutil -lint on each manifest by hand."
+    finding medium "APPLE-MANIFEST-VALIDATOR-UNAVAILABLE" "Privacy manifests present but python3 or scripts/validate-privacy-manifest.py is missing, so their internals were not validated" "Use a trusted playbook checkout or installed skill with python3, or run plutil -lint on each manifest by hand."
   fi
   [ "$IS_UNITY" -eq 1 ] || grep_has 'ITSAppUsesNonExemptEncryption' || finding high "APPLE-EXPORT-COMPLIANCE-MISSING" "ITSAppUsesNonExemptEncryption not set" "Set it in Info.plist or the build stalls in Missing Compliance and never reaches review."
   # Native StoreKit keeps the original restore list. A plugin's own restore call only counts for a plugin app.
@@ -1414,7 +1436,7 @@ if [ "$IS_AND" -eq 1 ]; then
     local mf
     mf="$(grep '/AndroidManifest[.]xml$' "$FILELIST" | grep -vE '/src/(debug|androidTest|test)[^/]*/')"
     [ -n "$mf" ] || return 1
-    printf '%s\n' "$mf" | tr '\n' '\0' | xargs -0 python3 -c "$(cat <<'FGSPY'
+    printf '%s\n' "$mf" | tr '\n' '\0' | xargs -0 python3 -I -c "$(cat <<'FGSPY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -1445,7 +1467,7 @@ FGSPY
     local gf
     gf="$(grep -E '[.](gradle|kts)$' "$FILELIST")"
     [ -n "$gf" ] || return 1
-    printf '%s\n' "$gf" | tr '\n' '\0' | xargs -0 python3 -c "$(cat <<'ABIPY'
+    printf '%s\n' "$gf" | tr '\n' '\0' | xargs -0 python3 -I -c "$(cat <<'ABIPY'
 import re
 import sys
 
@@ -1821,9 +1843,7 @@ emit_report() {  # $1 is the exit code about to be returned
 # A hook timeout sends TERM. Flush what was buffered to stderr so the partial report is not lost.
 trap 'emit_report 2; exit 143' INT TERM HUP
 if [ -n "$STDIN_JSON" ]; then
-  REPORT="$(mktemp 2>/dev/null)" || REPORT=""
-  # An unusable mktemp falls back to /tmp, as the scan buffer does, so the report still reaches stderr.
-  { [ -n "$REPORT" ] && : >"$REPORT" 2>/dev/null; } || REPORT="/tmp/ascg-report.$$"
+  REPORT="$WORK_DIR/report"
   if [ -n "$REPORT" ] && : >"$REPORT" 2>/dev/null; then exec 3>&1; exec >"$REPORT"; else REPORT=""; REPORT_DEGRADED=1; fi
   # Unbuffered, Cursor still needs a clean stdout, so the live report goes to stderr instead.
   if [ -z "$REPORT" ] && [ "$IS_CURSOR" -eq 1 ]; then exec 3>&1; exec 1>&2; CURSOR_FD=1; fi
@@ -1832,18 +1852,16 @@ fi
 # A stale checklist gives false confidence. Every report names its rule pack version and the newest
 # verified_on date, and warns when that is older than APP_STORE_GUARD_STALE_DAYS (default 60).
 rule_pack_line() {
-  local hd root="" c ver="unknown" dates="" newest="" oldest="" total=0 old=0 cutoff age="" then_s now_s stale="${APP_STORE_GUARD_STALE_DAYS:-60}"
+  local data_file version_file ver="unknown" dates="" newest="" oldest="" total=0 old=0 cutoff age="" then_s now_s stale="${APP_STORE_GUARD_STALE_DAYS:-60}"
   case "$stale" in ''|*[!0-9]*) stale=60 ;; esac
-  hd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  for c in "$hd/../.." "$hd/../skills/app-store-compliance" "${HOME:-}/.agents/skills/app-store-compliance"; do
-    if [ -f "$c/data/regulatory-deadlines.json" ]; then root="$(cd "$c" && pwd)"; break; fi
-  done
-  if [ -z "$root" ]; then
-    echo "Rule pack. unknown. The guard runs without its data folder, so its rule dates cannot be shown. Reinstall with scripts/install.sh."
+  if ! data_file="$(guard_bundle_file data/regulatory-deadlines.json)"; then
+    echo "Rule pack. unknown. The reviewed playbook data is unavailable, so its rule dates cannot be shown."
     return 0
   fi
-  [ -f "$root/VERSION" ] && ver="$(tr -d '[:space:]' < "$root/VERSION")"
-  dates="$(grep -oE '"verified_on":[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}"' "$root/data/regulatory-deadlines.json" 2>/dev/null | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort)"
+  if version_file="$(guard_bundle_file VERSION)" && [ "$(dirname "$version_file")" = "$(dirname "$(dirname "$data_file")")" ]; then
+    ver="$(tr -d '[:space:]' < "$version_file")"
+  fi
+  dates="$(grep -oE '"verified_on":[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}"' "$data_file" 2>/dev/null | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort)"
   if [ -n "$dates" ]; then
     newest="$(printf '%s\n' "$dates" | tail -1)"; oldest="$(printf '%s\n' "$dates" | head -1)"
     total="$(printf '%s\n' "$dates" | wc -l | tr -d ' ')"
@@ -1899,11 +1917,11 @@ readiness_check() {  # $1 app root, $2 workspace root
     finding critical "MANUAL-READINESS-UNREADABLE" ".app-review-readiness.json for $label${from} exists but is not a readable file, so a fail inside it cannot be seen" "Replace it with a regular file shaped like templates/app-review-readiness.json, or remove it."
     flush_findings; return 0
   fi
-  if ! tool_ok python3 -c pass; then
+  if ! tool_ok python3 -I -c pass; then
     finding critical "MANUAL-READINESS-UNREAD" ".app-review-readiness.json exists for $label, but python3 is not available to read it" "Install python3, then run the guard again."
     flush_findings; return 0
   fi
-  out="$(python3 - "$f" "$req" "$from" <<'PYR'
+  out="$(python3 -I - "$f" "$req" "$from" <<'PYR'
 import datetime, json, os, re, signal, stat, sys, threading
 
 CHECKS = [
@@ -2126,17 +2144,16 @@ READINESS_EOF
 
 # The deadline list prints after the findings, and only for the stores this project ships to (issue #842).
 print_deadlines() {
-  local hd py="" c plats=""
-  hd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  for c in "$hd/../../scripts/deadline-checker.py" "$hd/../skills/app-store-compliance/scripts/deadline-checker.py" "${HOME:-}/.agents/skills/app-store-compliance/scripts/deadline-checker.py"; do
-    if [ -f "$c" ]; then py="$c"; break; fi
-  done
-  [ -n "$py" ] || return 0
+  local py plats=""
+  if ! py="$(guard_bundle_file scripts/deadline-checker.py)"; then
+    echo "Regulatory deadline list skipped. Playbook helper unavailable; see the regulatory checklist."
+    return 0
+  fi
   echo ""
-  if ! tool_ok python3 -c pass; then echo "Regulatory deadline list skipped. python3 not found."; return 0; fi
+  if ! tool_ok python3 -I -c pass; then echo "Regulatory deadline list skipped. python3 not found."; return 0; fi
   [ "$ANY_IOS" -eq 1 ] && plats="ios"
   [ "$ANY_AND" -eq 1 ] && plats="${plats:+$plats,}android"
-  if [ -n "$plats" ]; then python3 "$py" --brief --platforms "$plats"; else python3 "$py" --brief; fi
+  if [ -n "$plats" ]; then python3 -I "$py" --brief --platforms "$plats"; else python3 -I "$py" --brief; fi
 }
 
 echo "== App Store Compliance Guard =="

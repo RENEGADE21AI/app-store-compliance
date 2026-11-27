@@ -9,14 +9,6 @@ lang: en
 theme: jekyll-theme-primer
 author: Mirza Iqbal
 github_username: mjmirza
-twitter:
-  username: MirzaJhanzaib
-social:
-  name: Mirza Iqbal
-  links:
-    - https://github.com/mjmirza
-    - https://twitter.com/MirzaJhanzaib
-    - https://next8n.com
 plugins:
   - jekyll-seo-tag
   - jekyll-sitemap
@@ -30,5 +22,3 @@ titles_from_headings:
   strip_title: true
 include:
   - llms.txt
-webmaster_verifications:
-  google: dHbguG3JdSMV02JY_ltLOKoI--3cG4dQEEkT2K_AnmA

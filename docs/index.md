@@ -58,12 +58,12 @@ Questions from the X replies are answered in the [FAQ](FAQ.md). More answers in 
 ## Run the guard
 
 ```bash
-git clone https://github.com/mjmirza/app-store-compliance ~/repositories/app-store-compliance
-bash ~/repositories/app-store-compliance/scripts/install.sh install
+git clone https://github.com/RENEGADE21AI/app-store-compliance ~/repositories/app-store-compliance
+bash ~/repositories/app-store-compliance/agent-os/hooks/app-store-compliance-guard.sh "/path/to/your/app"
 ```
 
 Maintained by [Mirza Iqbal](https://github.com/mjmirza). Not affiliated with Apple or Google. App Store is a trademark of Apple Inc. Google Play is a trademark of Google LLC.
 
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"App Store Compliance Playbook","description":"Open playbook and pre-submission guard to stop App Store and Google Play rejections.","codeRepository":"https://github.com/mjmirza/app-store-compliance","programmingLanguage":["Shell","Python"],"author":{"@type":"Person","name":"Mirza Iqbal","url":"https://github.com/mjmirza","sameAs":["https://twitter.com/MirzaJhanzaib","https://next8n.com"]},"keywords":"App Store rejection, Google Play rejection, app review guidelines, privacy manifest, Data safety, account deletion, EU AI Act, COPPA"}
+{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"App Store Compliance Playbook","description":"Open playbook and pre-submission guard to stop App Store and Google Play rejections.","codeRepository":"https://github.com/mjmirza/app-store-compliance","programmingLanguage":["Shell","Python"],"author":{"@type":"Person","name":"Mirza Iqbal","url":"https://github.com/mjmirza"},"keywords":"App Store rejection, Google Play rejection, app review guidelines, privacy manifest, Data safety, account deletion, EU AI Act, COPPA"}
 </script>

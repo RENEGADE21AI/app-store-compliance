@@ -8,7 +8,7 @@ Questions about one person's own rejection were left to that person. The pattern
 
 Fair question, and stars prove nothing. Check it yourself in a few minutes.
 
-- The guard is one Bash file. It reads your project, uses temporary scan buffers that it removes, makes no network call, and never changes your app. If `~/.claude/hooks/hook-log.sh` exists, it loads that helper to log errors and overrides.
+- The guard is one Bash file. It reads your project, uses temporary scan buffers that it removes, makes no network call, and never changes your app. Errors and overrides are written to standard error. The guard loads no separate logging script.
 - `scripts/install.sh` writes into `~/.claude` (or `$CLAUDE_CONFIG_DIR`). the hook, the skill folder, one command file, and a hook entry in `settings.json`. It backs up `settings.json` first as `settings.json.bak-<timestamp>`.
 - `bash scripts/install.sh install --dry-run` prints every change and writes nothing. `doctor` checks the install, `uninstall` removes it.
 - Neither the installer nor the guard calls curl or wget. `scripts/monitor.py` fetches Apple's public developer feed by default; pass `--mock`, `--simulate` or `--news-file` to stay offline. The Android, AI policy and privacy monitors fetch only with `--live`.

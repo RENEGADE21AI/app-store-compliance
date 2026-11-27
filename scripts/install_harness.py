@@ -4,6 +4,7 @@ Usage. install_harness.py <tool> [install|doctor|uninstall] [--dry-run] [--repo 
 
 import fnmatch
 import json
+import filecmp
 import os
 import re
 import shutil
@@ -1236,10 +1237,14 @@ def run_plugin(plugin, command, cwd):
 
 def verify(tool, lay, guard, repo_dir):
     print("\nChecking the " + SPECS[tool]["name"] + " install.")
-    if os.path.isfile(guard):
-        ok("guard present at " + shown(guard))
-    else:
+    if not os.path.isfile(guard):
         fail("guard missing at " + shown(guard))
+        return 1
+    expected = os.path.join(REPO, "agent-os", "hooks", GUARD_NAME)
+    if not filecmp.cmp(guard, expected, shallow=False):
+        fail("Installed guard differs from this checkout. Review or update it before running verification.")
+        return 1
+    ok("guard present at " + shown(guard))
     if tool != "copilot-repo":
         sk = skill_dir(tool)
         need = (
@@ -1275,7 +1280,7 @@ def verify(tool, lay, guard, repo_dir):
     try:
         style = SPECS[tool]["style"]
         if style == "plugin":
-            check_plugin(lay, app)
+            check_plugin(lay, guard, app)
         elif style == "toml":
             check_kimi(lay, guard, app)
         elif style == "kiro":
@@ -1307,13 +1312,18 @@ def verify(tool, lay, guard, repo_dir):
     return 0
 
 
-def check_plugin(lay, app):
+def check_plugin(lay, guard, app):
     for path in (lay["config"], legacy_plugin(lay)):
         if not os.path.isfile(path):
             fail("plugin missing at " + shown(path))
             return
-        if not owned_plugin(path):
-            fail("plugin at " + shown(path) + " was not created by this installer")
+        try:
+            with open(path, encoding="utf-8") as f:
+                matches = f.read() == plugin_source(guard)
+        except (OSError, UnicodeError):
+            matches = False
+        if not matches:
+            fail("Installed plugin differs from this checkout. Review or update it before running verification.")
             return
     rc = run_plugin(lay["config"], SUBMIT, app)
     if rc is None:
@@ -1368,7 +1378,10 @@ def check_kimi(lay, guard, app):
             + " would not run before a shell command. Check its event, matcher and timeout, or run install again"
         )
         return
-    prove(h["command"], "kimi", "toml", app, app)
+    if h["command"] != hook_cmd("kimi", guard):
+        fail("The registered Kimi command differs from the expected guard command.")
+        return
+    prove(hook_cmd("kimi", guard), "kimi", "toml", app, app)
 
 
 def check_hooks(tool, lay, guard, app, repo_dir):
@@ -1389,11 +1402,17 @@ def check_hooks(tool, lay, guard, app, repo_dir):
             else:
                 fail("no " + ev + " hook entry for the guard in " + shown(lay["config"]))
             continue
+        if st == "copilot" and (
+            found[0].get("bash") != cmd or found[0].get("powershell") != ps_cmd(tool, guard)
+        ):
+            fail("The registered Copilot commands differ from the expected guard commands.")
+            continue
         found_any = True
-        line = found[0].get("command") or found[0].get("bash")
-        prove(line, tool, st, app, repo_dir or "/")
+        # Verify the canonical invocation after inspecting the registration.
+        # Never pass command strings loaded from an existing config to a shell.
+        prove(cmd, tool, st, app, repo_dir or "/")
         if st == "copilot":
-            prove_ps(found[0]["powershell"], tool, app, repo_dir or "/")
+            prove_ps(ps_cmd(tool, guard), tool, app, repo_dir or "/")
     if found_any:
         ok("hook registered in " + shown(lay["config"]))
     if tool in ("copilot", "copilot-repo") and not (type(data.get("version")) is int and data.get("version") == 1):
@@ -1537,6 +1556,9 @@ def main(argv):
     lay = layout(tool, repo_dir)
     guard = os.path.join(lay["hooks"], GUARD_NAME)
     if mode == "doctor":
+        if dry:
+            print("Dry run. No installed commands were executed.")
+            return 0
         return verify(tool, lay, guard, repo_dir)
     if mode == "uninstall":
         return uninstall(tool, lay, guard, dry)

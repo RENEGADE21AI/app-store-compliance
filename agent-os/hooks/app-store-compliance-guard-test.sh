@@ -2128,7 +2128,7 @@ rr_run "$D"
 rr_has 'APPLE-5.1.1-MISSING-USAGE-DESCRIPTION' && ok "rr-A09-4 a standalone scan still covers both stores" || bad "rr-A09-4 a standalone scan still covers both stores"
 rm -rf "$D"
 
-# A24 an unusable mktemp falls back to /tmp, as before 2.0.0, so the scan still runs
+# A24 an unusable mktemp yields incomplete coverage without predictable shared paths.
 # macOS mktemp ignores an unusable TMPDIR, so a PATH shim stands in. one fails, one hands back a path that cannot be written.
 D="$(mk_ios_clean)"; SHIMS="$(mktemp -d)"; mkdir -p "$SHIMS/fail" "$SHIMS/bad"
 printf '#!/bin/sh\nexit 1\n' > "$SHIMS/fail/mktemp"
@@ -2136,9 +2136,9 @@ printf '#!/bin/sh\necho /nonexistent/ascg-tmp/buffer\n' > "$SHIMS/bad/mktemp"
 chmod +x "$SHIMS/fail/mktemp" "$SHIMS/bad/mktemp"
 for s in fail bad; do
   OUT="$(PATH="$SHIMS/$s:$PATH" bash "$GUARD" "$D" 2>&1)"; RC=$?
-  [ "$RC" -eq 0 ] && ! rr_has 'NOT CHECKED' && rr_has '^CLEAR' && ok "rr-A24-1 an unusable mktemp falls back to /tmp and still scans (mktemp $s)" || bad "rr-A24-1 an unusable mktemp falls back to /tmp and still scans (mktemp $s rc=$RC)"
-  ERR="$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"xcrun altool --upload-app -f a.ipa"}}))' | PATH="$SHIMS/$s:$PATH" CLAUDE_PROJECT_DIR="$D" bash "$GUARD" 2>&1)"; RC=$?
-  ! printf '%s' "$ERR" | grep -q 'NOT CHECKED' && printf '%s' "$ERR" | grep -q 'App Store Compliance Guard' && ok "rr-A24-2 as a hook an unusable mktemp still scans through /tmp (mktemp $s)" || bad "rr-A24-2 as a hook an unusable mktemp still scans through /tmp (mktemp $s rc=$RC)"
+  [ "$RC" -eq 1 ] && rr_has 'NOT CHECKED' && ! rr_has '^CLEAR' && ok "rr-A24-1 an unusable mktemp reports incomplete coverage ($s)" || bad "rr-A24-1 an unusable mktemp reports incomplete coverage ($s rc=$RC)"
+  ERR="$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"xcrun altool --upload-app -f a.ipa"}}))' | PATH="$SHIMS/$s:$PATH" CLAUDE_PROJECT_DIR="$D" APP_STORE_GUARD_BLOCK_UNCHECKED=1 bash "$GUARD" 2>&1)"; RC=$?
+  [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'NOT CHECKED' && ok "rr-A24-2 strict hook blocks when secure scratch is unavailable ($s)" || bad "rr-A24-2 strict hook blocks when secure scratch is unavailable ($s rc=$RC)"
 done
 rm -rf "$D" "$SHIMS"
 

@@ -1,6 +1,6 @@
 # App Store Compliance Playbook
 
-> Open playbook and pre-submission guard that stops App Store and Google Play rejections. Maps each common rejection to its guideline and fix, tracks app regulation deadlines, and runs inside AI coding tools.
+> Reference index for App Store and Google Play submission checks. Confirm current requirements with official platform sources. A static scan covers selected risks and has limited evidence about a submitted build or listing.
 
 ## Core
 - [Pre-submission checklist](https://mjmirza.github.io/app-store-compliance/PRE-SUBMISSION-CHECKLIST.html): every check before you submit

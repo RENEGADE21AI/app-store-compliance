@@ -127,8 +127,8 @@ BLOCK
 # Edits settings.json. $1 is add or remove. Exit 0 changed, 3 nothing to change, 4 not safe to edit, 5 no JSON tool.
 settings_edit() {
   local action="$1"
-  if have python3 -c pass; then
-    python3 - "$SETTINGS" "$HOOK_CMD" "$GUARD_NAME" "$action" "$GUARD" "$SHOWN/hooks/$GUARD_NAME" <<'PY'
+  if have python3 -I -c pass; then
+    python3 -I - "$SETTINGS" "$HOOK_CMD" "$GUARD_NAME" "$action" "$GUARD" "$SHOWN/hooks/$GUARD_NAME" <<'PY'
 import json, os, re, shutil, sys, tempfile, time
 
 path, cmd, name, action = sys.argv[1:5]
@@ -290,8 +290,8 @@ PY
 # Prints the registered command Claude Code would run for a Bash call, empty when there is none.
 registered_cmd() {
   [ -f "$SETTINGS" ] || return 0
-  if have python3 -c pass; then
-    python3 -c 'import json,os,re,sys
+  if have python3 -I -c pass; then
+    python3 -I -c 'import json,os,re,sys
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(0)
 hc=sys.argv[2]
@@ -344,27 +344,34 @@ verify() {
   local reg; reg="$(registered_cmd)"
   if [ -n "$reg" ]; then good "hook registered for Bash in $SHOWN/settings.json"; else fail "no working hook entry for Bash in $SHOWN/settings.json"; fi
 
+  if [ -f "$GUARD" ] && ! cmp -s "$GUARD_SRC" "$GUARD"; then
+    fail "Installed guard differs from this checkout. Review or update it before running verification."
+    return 1
+  fi
   if [ -f "$GUARD" ]; then
     local fx rc out
-    fx="$(mktemp -d)"; mkdir -p "$fx/App"
+    if ! fx="$(mktemp -d)" || [ ! -d "$fx" ] || ! mkdir "$fx/App"; then
+      fail "Could not create a private fixture directory. No verification commands were run."
+      return 1
+    fi
     printf '<plist><dict></dict></plist>' > "$fx/App/Info.plist"
     printf 'import CoreLocation\nclass A { func signIn(){} func createAccount(){} }\nlet m=CLLocationManager()\nlet u="https://staging.example.com"\nimport Stripe\n' > "$fx/App/X.swift"
     bash "$GUARD" "$fx" >/dev/null 2>&1; rc=$?
     if [ "$rc" -eq 2 ]; then good "guard blocks a sample app with known rejection risks"; else fail "guard did not block the sample app when run directly (exit $rc, expected 2)"; fi
-    # The registered command string is what Claude Code runs, so that exact string is what gets tested.
+    # Inspect the registration above, then exercise the verified guard without evaluating config text.
     if [ -n "$reg" ]; then
-      ( cd "$fx" && printf '{"tool_name":"Bash","tool_input":{"command":"fastlane deliver"}}' | env -u CLAUDE_PROJECT_DIR bash -c "$reg" >/dev/null 2>&1 ); rc=$?
+      ( cd "$fx" && printf '{"tool_name":"Bash","tool_input":{"command":"fastlane deliver"}}' | env -u CLAUDE_PROJECT_DIR bash "$GUARD" >/dev/null 2>&1 ); rc=$?
       if [ "$rc" -eq 2 ]; then good "the registered hook command blocks a submit command"; else fail "the registered hook command did not block a submit command (exit $rc, expected 2). Command. $reg"; fi
-      out="$( cd "$fx" && printf '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' | env -u CLAUDE_PROJECT_DIR bash -c "$reg" 2>&1 )"; rc=$?
+      out="$( cd "$fx" && printf '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' | env -u CLAUDE_PROJECT_DIR bash "$GUARD" 2>&1 )"; rc=$?
       if [ "$rc" -eq 0 ] && [ -z "$out" ]; then good "the registered hook command stays silent on an ordinary command"; else fail "the registered hook command reacted to an ordinary command (exit $rc)"; fi
       if [ "$MATCHER" != "Bash" ]; then
-        ( cd "$fx" && printf '{"tool_name":"PowerShell","tool_input":{"command":"fastlane deliver"}}' | env -u CLAUDE_PROJECT_DIR bash -c "$reg" >/dev/null 2>&1 ); rc=$?
+        ( cd "$fx" && printf '{"tool_name":"PowerShell","tool_input":{"command":"fastlane deliver"}}' | env -u CLAUDE_PROJECT_DIR bash "$GUARD" >/dev/null 2>&1 ); rc=$?
         if [ "$rc" -eq 2 ]; then good "the registered hook command blocks a submit command run through PowerShell"; else fail "the registered hook command did not block a PowerShell submit command (exit $rc)"; fi
       fi
     fi
     rm -rf "$fx"
   fi
-  have python3 -c pass || warn "python3 not found. The guard still runs, the deadline list and the privacy manifest validator are skipped."
+  have python3 -I -c pass || warn "python3 not found. The guard still runs, the deadline list and the privacy manifest validator are skipped."
   say ""
   if [ "$PROBLEMS" -eq 0 ]; then
     say "Install verified."
@@ -437,6 +444,6 @@ case "$MODE" in
   version) printf 'app-store-compliance %s\n' "$(cat "$REPO/VERSION" 2>/dev/null || echo unknown)" ;;
   help) say "$USAGE"; say "  --tool     the AI coding tool to install into, claude by default. all installs into every one found"; say "  --repo     with --tool copilot-repo, the app repository whose .github/hooks gets the guard"; say "  install    copy the guard, skill and slash command, register the hook, verify (default)"; say "  doctor     verify an existing install, change nothing"; say "  uninstall  remove everything install added"; say "Set CLAUDE_CONFIG_DIR to target a config folder other than ~/.claude." ;;
   install) do_install ;;
-  doctor) verify ;;
+  doctor) if [ "$DRY" -eq 1 ]; then say "Dry run. No installed commands were executed."; else verify; fi ;;
   uninstall) do_uninstall ;;
 esac

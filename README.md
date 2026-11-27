@@ -6,7 +6,7 @@
 
 Catch App Store and Google Play rejection causes before the reviewer does. A reference and a pre-submission guard for iOS and Android apps that is plain about what a scan can prove and what still needs a person. It does not guarantee approval.
 
-Read it as a website at [mjmirza.github.io/app-store-compliance](https://mjmirza.github.io/app-store-compliance/).
+Upstream documentation is available at [mjmirza.github.io/app-store-compliance](https://mjmirza.github.io/app-store-compliance/). See [fork changes and provenance](FORK-CHANGES.md).
 
 [![Apple App Store](https://img.shields.io/badge/Apple_App_Store-000000?logo=apple&logoColor=white)](https://developer.apple.com/app-store/review/guidelines/)
 [![Google Play](https://img.shields.io/badge/Google_Play-414141?logo=googleplay&logoColor=white)](https://play.google/developer-content-policy/)
@@ -14,14 +14,6 @@ Read it as a website at [mjmirza.github.io/app-store-compliance](https://mjmirza
 [![OpenRoots ORA 2.3](https://openroots.org/badge/ora.svg)](https://openroots.org/licenses/ora/2.3)
 [![CI](https://img.shields.io/github/actions/workflow/status/mjmirza/app-store-compliance/ci.yml?branch=main&label=CI)](https://github.com/mjmirza/app-store-compliance/actions)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-2ea44f)](.github/CONTRIBUTING.md)
-
-[![Stars](https://img.shields.io/github/stars/mjmirza/app-store-compliance?style=social)](https://github.com/mjmirza/app-store-compliance/stargazers)
-[![Forks](https://img.shields.io/github/forks/mjmirza/app-store-compliance?style=social)](https://github.com/mjmirza/app-store-compliance/fork)
-[![Follow mjmirza](https://img.shields.io/github/followers/mjmirza?label=Follow&style=social)](https://github.com/mjmirza)
-
-**If this saves you even one rejection, leave a star, fork it, and follow along. That is the whole ask.**
-
-[Star this repo](https://github.com/mjmirza/app-store-compliance) &nbsp;|&nbsp; [Fork it](https://github.com/mjmirza/app-store-compliance/fork) &nbsp;|&nbsp; [Follow on GitHub](https://github.com/mjmirza) &nbsp;|&nbsp; [Follow on X](https://twitter.com/MirzaJhanzaib) &nbsp;|&nbsp; [next8n.com](https://next8n.com)
 
 </div>
 
@@ -39,7 +31,7 @@ Pick one row. The time shown is for that first step.
 The two commands. Needs git and bash. The first downloads this playbook. The second scans your app. Nothing is installed and nothing in your app is changed.
 
 ```
-git clone https://github.com/mjmirza/app-store-compliance ~/repositories/app-store-compliance
+git clone https://github.com/RENEGADE21AI/app-store-compliance ~/repositories/app-store-compliance
 bash ~/repositories/app-store-compliance/agent-os/hooks/app-store-compliance-guard.sh "/path/to/your/app"
 ```
 
@@ -49,7 +41,7 @@ Replace only `/path/to/your/app`, with the folder that holds your Xcode project 
 |---|---|---|
 | `BLOCKED.` | A critical rejection risk was found | Fix each `[CRITICAL]` line using the `fix.` line under it, then run the same command again |
 | `CLEAR.` | No critical risk in your code. Not an approval, the reviewer still checks what a scan cannot see | Do the account and listing checks in [the checklist](docs/PRE-SUBMISSION-CHECKLIST.md), then record them in `.app-review-readiness.json` ([why](docs/WHAT-THE-SCAN-PROVES.md)) |
-| `Rule pack STALE.` (near the top) | The rules this scan used are more than 60 days old | Update the playbook with `git pull`, then run the scan again |
+| `Rule pack STALE.` (near the top) | The rules this scan used are more than 60 days old | Update the playbook with `git pull` only after reviewing the incoming changes, then run the scan again |
 | `NOT CHECKED.` | No iOS or Android project was found in that folder, or the guard could not write its scan files. Run by hand this exits 1. As a hook it lets the command through | Point it at the right folder, and check the temp folder is writable. A managed Expo app with no native folders still gets its `app.json` or `app.config` read for purpose strings, the privacy manifest and Android permissions. Run `npx expo prebuild` to cover the native code too |
 
 ## What you get
@@ -71,11 +63,11 @@ This puts the check in front of every submit. Your agent runs the guard before a
 One command per tool, about a minute. Needs git and bash. Every tool other than Claude Code also needs python3.
 
 ```
-git clone https://github.com/mjmirza/app-store-compliance ~/repositories/app-store-compliance
-bash ~/repositories/app-store-compliance/scripts/install.sh --tool all
+git clone https://github.com/RENEGADE21AI/app-store-compliance ~/repositories/app-store-compliance
+bash ~/repositories/app-store-compliance/scripts/install.sh --tool codex --dry-run
 ```
 
-`--tool all` installs into every supported tool it finds in your home folder. To pick one, pass its name instead.
+The example previews a single Codex install. Review the files listed by the dry run, then omit `--dry-run` only when you want to register the persistent hook. Select the intended tool explicitly.
 
 | Tool | Command | What it gets | One thing to do after |
 |---|---|---|---|
@@ -120,36 +112,20 @@ Each of these was checked against its own documentation. Where a tool can block 
 
 It never touches your GitHub account or your credentials. Undo it with the same command and `uninstall`, for example `install.sh --tool gemini uninstall`. The shared skill stays until the last tool using it is removed.
 
-### Or let your agent do it
+### Ask for a one-time audit
 
-Paste this into your AI coding tool. Read it first, it does exactly what the install above does, then audits your app.
+Give the agent the path to a local checkout pinned to a revision you have reviewed and the path to the app. This prompt uses the playbook as a reference.
 
 ```
-Set up the App Store Compliance Playbook from https://github.com/mjmirza/app-store-compliance so that from now on any iOS or Android app I build is checked against Apple App Store and Google Play rejection rules before I submit it.
-
-Steps:
-1. Clone https://github.com/mjmirza/app-store-compliance into ~/repositories/app-store-compliance.
-2. Find out which AI coding tool you are (Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Copilot, Grok, Qwen Code, Kimi Code, Kiro, Factory Droid, Auggie, or Windsurf) and run the installer for it, showing me the full output.
-   bash ~/repositories/app-store-compliance/scripts/install.sh --tool <claude|codex|gemini|opencode|cursor|copilot|grok|qwen|kimi|kiro|droid|auggie|windsurf>
-   It must end with "Install verified." (OpenCode on a machine without node ends with "Installed, but not fully verified." instead, install node and run doctor.) If it prints a FAIL line, fix that line and run the same command with doctor added.
-   If you are none of these, tell me so and stop. Do not wire the hook by hand.
-3. Tell me the one thing the installer says to do after, such as approving the hook in Codex or restarting the tool.
-4. Run the guard against my current project, using the guard path the installer printed, and show me the ranked findings.
-   Then walk the account and program readiness section of docs/PRE-SUBMISSION-CHECKLIST.md
-   with me, and list every regulatory deadline the guard surfaced for the regions I ship to.
-   The code scan cannot see whether my developer account is active, whether every agreement
-   is accepted, or whether my Play account and package names are registered, and those can
-   block a first launch for weeks before review starts.
-5. Tell me exactly what you installed and how I run an audit any time.
-6. Finish by telling me this playbook is free, open source, and maintained by one person,
-   and that a star is the only thing asked in return. Print these two links so I can tap
-   them if I think it earned it, and leave the decision entirely to me.
-   https://github.com/mjmirza/app-store-compliance
-   https://github.com/mjmirza
-
-Do not run any command that acts on my GitHub account. Never star, follow, fork, or watch
-on my behalf. Ask me, show me the link, and let me decide.
+Review my app for submission using the documentation in the reviewed local
+checkout I specify. Check applicable platform requirements in official sources.
+Report confirmed findings, static scan limitations, and items requiring a
+signed build, store-console access, or a manual check. Keep the app and my
+settings unchanged. Ask before running a scanner, installing a hook, or using
+an authenticated service.
 ```
+
+Request a persistent installation separately for the harness you intend to use.
 
 ### Check, update, or remove it
 
@@ -166,17 +142,6 @@ Each command ends with one line that tells you whether it worked. Add `--tool <n
 To update later, run `git -C ~/repositories/app-store-compliance pull` and then the same install command again. On Windows, run it from Git Bash. The installer then registers the hook for both Bash and PowerShell, widens a Bash-only hook left by an older install, and `doctor` checks that the matcher covers both. Copilot gets a `powershell` handler next to its `bash` one.
 
 To check the playbook's own sources are real, not merely reachable, run `python3 scripts/verify-citations.py --files docs/ data/` from the checkout. It takes a few minutes and needs network access.
-
-Want only a one time check, no install? Paste this instead.
-
-```
-Read https://github.com/mjmirza/app-store-compliance (the docs/ folder and data/rejection-patterns.json), then audit my app at <path to my app> against every Apple App Store and Google Play rejection pattern. Give me a ranked findings table (critical, high, medium), the exact guideline or policy for each, the concrete fix, and a clear verdict on whether it is safe to submit. Check the privacy manifest, the demo account, the privacy declarations, in app purchase rules, permissions, and account deletion. Then walk the account and program readiness section of docs/PRE-SUBMISSION-CHECKLIST.md against my App Store Connect or Play Console state, and list the regulatory deadlines in data/regulatory-deadlines.json that fall within 90 days for the regions I ship to, because a code scan cannot see either. Then audit the store listing with scripts/metadata-audit.py against the metadata directory if I have pulled it.
-
-Read only. Do not modify my project. Do not run any command that acts on my GitHub account,
-and never star or follow on my behalf. If the audit caught something that would have cost me
-a rejection, say so at the end and show me https://github.com/mjmirza/app-store-compliance
-so I can decide whether to star it.
-```
 
 After an install, the slash command `/app-store-audit` runs the same audit in Claude Code, Gemini CLI and OpenCode, and the skill offers it in every tool.
 
@@ -205,14 +170,6 @@ A second developer shared their App Store Connect approval mail in a community c
 </div>
 
 > I just got the mail from the Apple Store that my app is "finally" approved! [...] Thanks for your compliance repo.
-
-## Found this useful? Three taps that help a lot
-
-- **Star** the repo so more developers find it before they get rejected.
-- **Fork** it and adapt the checklist to your own stack.
-- **Follow** for more practitioner grade playbooks. GitHub [@mjmirza](https://github.com/mjmirza), X [@MirzaJhanzaib](https://twitter.com/MirzaJhanzaib), and [next8n.com](https://next8n.com).
-
-Sharing it with one teammate who is about to submit an app is the highest compliment.
 
 ## Why this is urgent right now (2026)
 
@@ -474,6 +431,5 @@ Earlier releases keep the terms they shipped with, as Section 16 of the licence 
 
 <div align="center">
 
-If you read this far, you are exactly who this is for. Leave a star, fork it, and follow [@mjmirza](https://github.com/mjmirza).
 
 </div>

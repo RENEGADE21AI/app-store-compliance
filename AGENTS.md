@@ -1,8 +1,6 @@
 # Release Review Guidelines for AI Agents
 
-Any software release (whether code, configuration, or documentation in this repository or any app utilizing this playbook) must be thoroughly audited against App Store and Google Play rejection rules.
-
-You MUST perform this review as if the release were about to be submitted directly to the App Store and Google Play.
+Use the checklist below for a requested mobile store submission audit. Changes to this playbook itself belong to the relevant repository tests and source checks. These notes confer no authority to install tooling, use credentials, act on store or GitHub accounts, or change projects that consult the playbook.
 
 ## Mandatory Verification Checklist
 

@@ -117,28 +117,14 @@ MAP_PATTERNS_TO_AREAS = {
 
 
 def resolve_guard():
-    """Find the guard. APP_STORE_GUARD_PATH wins, then the repo layout, then an installed skill.
-    Returns (path, None) or (None, reason)."""
-    env = os.environ.get("APP_STORE_GUARD_PATH", "").strip()
-    if env:
-        if os.path.isfile(env):
-            return os.path.abspath(env), None
-        return None, f"APP_STORE_GUARD_PATH points at {env}, which is not a file"
-    candidates = [
-        os.path.join(ROOT, "agent-os", "hooks", GUARD_NAME),
-        # installed. <config>/skills/app-store-compliance/scripts -> <config>/hooks
-        os.path.normpath(os.path.join(ROOT, "..", "..", "hooks", GUARD_NAME)),
-    ]
-    # shared skill in ~/.agents. the installer records each tool's guard path in .guards
-    try:
-        with open(os.path.join(ROOT, ".guards"), encoding="utf-8") as f:
-            candidates += [ln.rstrip("\n").partition("\t")[2] for ln in f if "\t" in ln]
-    except OSError:
-        pass
-    for c in candidates:
-        if c and os.path.isfile(c):
-            return c, None
-    return None, "looked in " + " and ".join(candidates)
+    """Use a guard from this distribution or a path explicitly selected by the caller."""
+    explicit = os.environ.get("APP_STORE_GUARD_PATH", "").strip()
+    candidate = os.path.abspath(explicit) if explicit else os.path.join(ROOT, "agent-os", "hooks", GUARD_NAME)
+    if not explicit and os.path.isfile(candidate) and os.path.normcase(os.path.realpath(candidate)) == os.path.normcase(os.path.join(os.path.realpath(ROOT), "agent-os", "hooks", GUARD_NAME)):
+        return candidate, None
+    if explicit and os.path.isfile(candidate) and not os.path.islink(candidate):
+        return candidate, None
+    return None, f"no reviewed guard at {candidate}; use a complete checkout or set APP_STORE_GUARD_PATH explicitly"
 
 
 def scan_problems(name, code, out, err, ok_codes=(0, 2)):

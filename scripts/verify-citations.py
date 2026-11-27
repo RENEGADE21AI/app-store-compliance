@@ -1,35 +1,33 @@
 #!/usr/bin/env python3
-"""Verifies every cited URL in the repo is real, not a soft-404.
-An HTTP 200 is not proof: some hosts serve a generic index for any unknown id."""
+"""Classify cited URLs offline; request HTTP reachability only with --online.
+A successful response does not establish citation accuracy or source authority.
+Redirects are not followed and no synthetic control URLs are requested.
+Exit 0: offline parsing or completed checks (possibly with explicit waivers).
+Exit 1: unreachable URLs. Exit 2: invalid input or incomplete online coverage.
+"""
 
 import argparse
-import hashlib
+import ipaddress
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 URL_RE = re.compile(r"https?://[^\s\"'<>)\]},`]+")
 TRAILING = ".,;:)]}>\"'`"
 
-# Reachable but bot-blocked or rate-limited. Real content, refuses automation.
-# Treating these as dead would make the gate noise, and a noisy gate gets disabled.
+# These responses leave the citation content unverified, rather than proving it dead.
 BLOCKED_CODES = {401, 403, 405, 429}
 
-# Server-side faults. The URL is not fabricated, the host is failing. Surfaced
-# as a warning because a monitor that fetches it is silently getting nothing.
+# Server-side faults also leave online coverage incomplete.
 TRANSIENT_CODES = {500, 502, 503, 504}
 TIMEOUT = 20
+MAX_BODY_BYTES = 65536
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-# Hosts that answer 200 for an unknown id. We fetch a deliberately bogus
-# control URL per host and treat a matching fingerprint as fabricated.
-SOFT404_PROBES = {
-    "developer.apple.com": "https://developer.apple.com/news/?id=zzzz-control-not-a-real-id-zzzz",
-    "support.google.com": "https://support.google.com/googleplay/android-developer/answer/zzzzcontrolzzzz",
-}
 
 TRUST = [
     (
@@ -91,27 +89,46 @@ def trust_of(host):
     return 4
 
 
-def fingerprint(body):
-    # A soft-404 index can rotate a numeric cache-buster on an asset URL (Apple news
-    # stamps sf-symbol.js?###########), so strip it to keep two fetches equal.
-    sample = re.sub(br"\?\d{8,}", b"", body[:200000])
-    return hashlib.sha256(sample).hexdigest()[:16]
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def public_url(url):
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        if (parsed.scheme not in ("http", "https") or not host or "\\" in host
+                or parsed.username is not None or parsed.password is not None
+                or host == "localhost" or host.endswith((".localhost", ".local"))):
+            return False
+        addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        return bool(addresses) and all(ipaddress.ip_address(hit[4][0]).is_global for hit in addresses)
+    except (OSError, ValueError):
+        return False
 
 
 def fetch(url):
+    if not public_url(url):
+        return 0, b""
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return r.getcode(), r.read()
+        opener = urllib.request.build_opener(NoRedirect())
+        with opener.open(req, timeout=TIMEOUT) as r:
+            return r.getcode(), r.read(MAX_BODY_BYTES)
     except urllib.error.HTTPError as e:
-        return e.code, b""
+        code = e.code
+        e.close()
+        return code, b""
     except Exception:
         return 0, b""
 
 
 def host_of(url):
-    m = re.match(r"https?://([^/]+)", url)
-    return m.group(1).lower() if m else ""
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def collect_urls(root, only=None):
@@ -150,17 +167,17 @@ def collect_urls(root, only=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Verify cited URLs are real, not soft-404."
+        description="Classify citations offline by default; --online requests HTTP reachability, not claim verification."
     )
     ap.add_argument("--dir", default=".", help="repo root to scan")
     ap.add_argument("--files", nargs="*", help="scan only these paths")
-    ap.add_argument(
-        "--offline", action="store_true", help="parse and classify only, no network"
-    )
+    network = ap.add_mutually_exclusive_group()
+    network.add_argument("--online", action="store_true", help="request only scanned URLs; no redirects or synthetic probes")
+    network.add_argument("--offline", action="store_true", help="compatibility alias for the default: parse and classify only")
     ap.add_argument(
         "--allow",
         default=".citation-allowlist",
-        help="file of URLs intentionally unreachable (one per line)",
+        help="explicit URL waivers (one per line); skipped URLs remain unverified",
     )
     args = ap.parse_args()
 
@@ -186,60 +203,48 @@ def main():
         return 0
 
     print(f"verify-citations. {len(urls)} distinct URL(s) across the scan.")
-    if args.offline:
+    if not args.online:
         for u in sorted(urls):
             print(f"  P{trust_of(host_of(u))} {u}")
-        print("offline mode. no network verification performed.")
+        print("offline mode. no network verification performed. Use --online to request reachability checks.")
         return 0
 
-    controls = {}
-    for host, probe in SOFT404_PROBES.items():
-        code, body = fetch(probe)
-        if code == 200 and body:
-            controls[host] = fingerprint(body)
-
-    fabricated, dead, blocked, transient, ok = [], [], [], [], 0
-    own_controls = set(SOFT404_PROBES.values())
+    dead, blocked, transient, redirects, waived, ok = [], [], [], [], [], 0
     for url in sorted(urls):
-        # Skip the verifier's own bogus control ids and its gauntlet fixtures.
-        if url in allow or url in own_controls:
-            ok += 1
+        if url in allow:
+            waived.append(url)
             continue
-        host = host_of(url)
-        code, body = fetch(url)
-        if code == 200 and body:
-            fp = fingerprint(body)
-            ctrl = controls.get(host)
-            if ctrl and fp == ctrl:
-                fabricated.append((url, sorted(urls[url])))
-            else:
-                ok += 1
+        code, _body = fetch(url)
+        if 200 <= code < 300:
+            ok += 1
         elif code in BLOCKED_CODES:
             blocked.append((url, code))
         elif code in TRANSIENT_CODES:
             transient.append((url, code, sorted(urls[url])))
-        elif 200 <= code < 400:
-            ok += 1
+        elif 300 <= code < 400:
+            redirects.append((url, code))
         else:
             dead.append((url, code, sorted(urls[url])))
 
-    print(f"  verified real. {ok}")
+    print(f"  HTTP success. {ok}")
+    if waived:
+        print(f"  WAIVED. {len(waived)} explicitly skipped, not verified.")
+        for url in waived:
+            print(f"    {url}")
     if blocked:
-        print(f"  reachable but bot-blocked, not a defect. {len(blocked)}")
+        print(f"  BLOCKED. {len(blocked)} response(s); citation content not verified.")
+        for url, code in blocked:
+            print(f"    [{code}] {url}")
     if transient:
-        print(f"\nHOST FAULT. {len(transient)} URL(s) return 5xx. Not fabricated, but any")
-        print("monitor fetching these is silently receiving nothing.")
+        print(f"\nTRANSIENT HOST FAULT. {len(transient)} URL(s) return 5xx; not verified.")
         for url, code, files in transient:
             print(f"  [{code}] {url}")
             for f in files:
                 print(f"        cited in {f}")
-    if fabricated:
-        print(f"\nFABRICATED. {len(fabricated)} URL(s) return 200 but serve the host's")
-        print("generic index, identical to a deliberately bogus control id.")
-        for url, files in fabricated:
-            print(f"  [FABRICATED] {url}")
-            for f in files:
-                print(f"               cited in {f}")
+    if redirects:
+        print(f"  REDIRECT. {len(redirects)} not followed; inspect the final URL explicitly.")
+        for url, code in redirects:
+            print(f"    [{code}] {url}")
     if dead:
         print(f"\nUNREACHABLE. {len(dead)} URL(s).")
         for url, code, files in dead:
@@ -247,10 +252,17 @@ def main():
             for f in files:
                 print(f"        cited in {f}")
 
-    if fabricated or dead:
+    if dead:
         print("\nverify-citations. FAIL")
         return 1
-    print("\nverify-citations. PASS. every citation resolves to real content.")
+    if blocked or transient or redirects:
+        print("\nverify-citations. INCOMPLETE. Required online responses remain unverified.")
+        return 2
+    if waived:
+        print("\nverify-citations. COMPLETE WITH WAIVERS. Waived citations were not verified.")
+    else:
+        print("\nverify-citations. PASS. Requested URLs returned successful HTTP responses.")
+    print("HTTP reachability does not verify cited claims or source authority.")
     return 0
 
 

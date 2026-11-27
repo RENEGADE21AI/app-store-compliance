@@ -2,7 +2,7 @@
 
 ## What this repository is, and what it is not
 
-This is a documentation and tooling playbook. It ships Markdown references, JSON data files, shell and Python scripts that read a project and report findings. It does not run a service, hold user data, or handle credentials.
+This is a documentation and tooling playbook. It ships Markdown references, JSON data files, shell and Python scripts that read a project and report findings. It does not run a service. Optional listing tools use credentials supplied for an authorized pull.
 
 That shapes what counts as a security issue here.
 
@@ -12,11 +12,7 @@ The default branch is the only supported version. Fixes land on `main` and are n
 
 ## Reporting a vulnerability
 
-Report privately through GitHub's [Report a vulnerability](https://github.com/mjmirza/app-store-compliance/security/advisories/new) form. That opens a private advisory visible only to the maintainer.
-
-Do not open a public issue for anything in the first list below.
-
-Expect a first response within 7 days. If a fix is warranted, the advisory stays private until it lands, then it is published with credit unless you ask otherwise.
+For a vulnerability specific to this fork, contact the fork owner privately. If private vulnerability reporting is enabled, use the [fork advisory form](https://github.com/RENEGADE21AI/app-store-compliance/security/advisories/new). Use the upstream project's reporting process for a vulnerability in upstream's copy. Share private account information or logs only with the intended recipient and after removing secrets.
 
 ## Report privately
 
@@ -38,6 +34,6 @@ Accuracy problems are the most valuable reports this project receives, and they 
 
 ## Running the tooling safely
 
-The guard and the monitors read files and make outbound requests to official Apple, Google, and EU sources. Review any script before running it against a private codebase, as you would with any third-party tooling.
+The local guard reads files. Monitors query public sources, and optional link checks make network requests only when requested. The Google listing pull creates and deletes a temporary Play edit when explicitly authorized. Review any script before running it against a private codebase, as you would with any third-party tooling.
 
 Reports produced in `--simulate` mode contain illustrative sample data, not live announcements. Never treat simulate output as a real requirement.

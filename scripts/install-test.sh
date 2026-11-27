@@ -26,7 +26,7 @@ done
 [ -e "$C/skills/app-store-compliance/.citation-allowlist" ] && ok "skill payload is complete, allowlist included" || bad "skill payload is complete, allowlist included"
 [ -f "$C/commands/app-store-audit.md" ] && ok "slash command is installed" || bad "slash command is installed"
 [ "$(hooks)" = "1" ] && ok "hook is registered once in settings.json" || bad "hook is registered once in settings.json (got $(hooks))"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); e=[h for x in d["hooks"]["PreToolUse"] if x.get("matcher")=="Bash" for h in x["hooks"] if "app-store-compliance-guard.sh" in h["command"]]; sys.exit(0 if e and e[0].get("timeout",0)>=120 and e[0].get("type")=="command" else 1)' "$C/settings.json" && ok "hook entry is a Bash PreToolUse command with a 120 second timeout" || bad "hook entry is a Bash PreToolUse command with a 120 second timeout"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); e=[h for x in d["hooks"]["PreToolUse"] if x.get("matcher") in ("Bash", "Bash|PowerShell") for h in x["hooks"] if "app-store-compliance-guard.sh" in h["command"]]; sys.exit(0 if e and e[0].get("timeout",0)>=120 and e[0].get("type")=="command" else 1)' "$C/settings.json" && ok "hook entry is a Bash PreToolUse command with a 120 second timeout" || bad "hook entry is a Bash PreToolUse command with a 120 second timeout"
 grep -q "^Install verified\." <<<"$OUT" && ok "install ends with a verified line" || bad "install ends with a verified line"
 grep -q "bash .*app-store-compliance-guard.sh /path/to/your/app" <<<"$OUT" && ok "install prints the one command to run next" || bad "install prints the one command to run next"
 
@@ -72,12 +72,13 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$C/hooks/app-store-compliance-guard.sh
 run doctor >/dev/null; RC=$?
 [ "$RC" -eq 1 ] && ok "doctor fails when the guard does not block a bad app" || bad "doctor fails when the guard does not block a bad app (rc=$RC)"
 
-# 9 with no python3 and no jq the files still install and the settings block is printed
+# 9 with no python3 or jq, the checked installer refuses before copying files
 fresh
 SHIM="$(mktemp -d)"
 for b in bash cp rm mkdir chmod cat grep sed awk find xargs tr head tail mktemp printf wc sort uniq cut dirname basename date cmp mv ls env plutil xmllint; do p="$(command -v "$b" 2>/dev/null)"; [ -n "$p" ] && ln -s "$p" "$SHIM/$b"; done
 OUT="$(PATH="$SHIM" CLAUDE_CONFIG_DIR="$C" bash "$INSTALL" 2>&1)"; RC=$?
-[ -x "$C/hooks/app-store-compliance-guard.sh" ] && [ ! -f "$C/settings.json" ] && grep -q '"PreToolUse"' <<<"$OUT" && [ "$RC" -eq 1 ] && ok "without python3 or jq the block is printed for a manual paste" || bad "without python3 or jq the block is printed for a manual paste (rc=$RC)"
+[ ! -e "$C/hooks/app-store-compliance-guard.sh" ] && [ ! -f "$C/settings.json" ] && [ "$RC" -eq 1 ] \
+  && ok "missing path-check tools leave the destination untouched" || bad "missing path-check tools leave the destination untouched (rc=$RC)"
 rm -rf "$SHIM"
 
 # 10 uninstall removes only what the installer added

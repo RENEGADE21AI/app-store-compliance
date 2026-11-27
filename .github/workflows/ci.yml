@@ -33,6 +33,7 @@ jobs:
 
       - name: Installer test suite
         run: |
+          python3 scripts/test-install-safety.py
           bash scripts/install-test.sh
           bash scripts/install-harness-test.sh
 

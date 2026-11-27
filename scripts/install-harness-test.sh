@@ -65,7 +65,11 @@ for t in codex gemini opencode cursor copilot grok qwen kimi kiro droid auggie w
   # 1 a fresh install verifies itself end to end
   fresh
   OUT="$(run --tool "$t")"; RC=$?
-  [ "$RC" -eq 0 ] && grep -q "^Install verified\." <<<"$OUT" && ok "$t fresh install verifies" || { bad "$t fresh install verifies (rc=$RC)"; echo "$OUT" | tail -15; }
+  if [ "$t" = gemini ]; then
+    [ "$RC" -eq 0 ] && grep -q "Gemini host activation was not confirmed" <<<"$OUT" && ok "gemini preserves global activation" || bad "gemini preserves global activation (rc=$RC)"
+  else
+    [ "$RC" -eq 0 ] && grep -q "^Install verified\." <<<"$OUT" && ok "$t fresh install verifies" || { bad "$t fresh install verifies (rc=$RC)"; echo "$OUT" | tail -15; }
+  fi
   [ -x "$(gdir "$t")/app-store-compliance-guard.sh" ] && ok "$t guard is installed and executable" || bad "$t guard is installed and executable"
   [ -f "$(skdir "$t")/SKILL.md" ] && [ -f "$(skdir "$t")/VERSION" ] && ok "$t shared skill and version installed" || bad "$t shared skill and version installed"
   if [ "$t" != "opencode" ]; then
@@ -414,11 +418,20 @@ fresh; mkdir -p "$H/.gemini" "$H/.codex"
 printf '{"ide":{"enabled":true},"security":{"auth":{"selectedType":"oauth-personal"}}}' > "$H/.gemini/settings.json"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash ~/other.sh"}]}]}}' > "$H/.codex/hooks.json"
 run --tool gemini >/dev/null; run --tool codex >/dev/null
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); h=d["hooks"]["BeforeTool"][0]; sys.exit(0 if d["ide"]=={"enabled":True} and d["security"]["auth"]["selectedType"]=="oauth-personal" and d["tools"]["enableHooks"] is True and h["matcher"]=="run_shell_command" and h["hooks"][0]["timeout"]==120000 else 1)' "$H/.gemini/settings.json" \
-  && ok "gemini keeps existing keys, enables hooks, uses a millisecond timeout" || bad "gemini keeps existing keys, enables hooks, uses a millisecond timeout"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); h=d["hooks"]["BeforeTool"][0]; sys.exit(0 if d["ide"]=={"enabled":True} and d["security"]["auth"]["selectedType"]=="oauth-personal" and "tools" not in d and h["matcher"]=="run_shell_command" and h["hooks"][0]["timeout"]==120000 else 1)' "$H/.gemini/settings.json" \
+  && ok "gemini keeps existing keys and global activation, uses a millisecond timeout" || bad "gemini keeps existing keys and global activation, uses a millisecond timeout"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=[h["command"] for g in d["hooks"]["PreToolUse"] for h in g["hooks"]]; sys.exit(0 if "bash ~/other.sh" in c and len(c)==2 else 1)' "$H/.codex/hooks.json" \
   && ok "codex keeps its existing hooks" || bad "codex keeps its existing hooks"
 ls "$H"/.gemini/settings.json.bak-* >/dev/null 2>&1 && ls "$H"/.codex/hooks.json.bak-* >/dev/null 2>&1 && ok "a backup is kept for each edited config" || bad "a backup is kept for each edited config"
+# A separately installed hook must not activate other Gemini handlers.
+fresh; mkdir -p "$H/.gemini"
+printf '{"tools":{"enableHooks":false},"hooks":{"BeforeTool":[{"matcher":"other","hooks":[{"type":"command","command":"true"}]}]}}' > "$(cfg gemini)"
+run --tool gemini >/dev/null; RC=$?
+[ "$RC" -eq 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["tools"]["enableHooks"] is False and len(d["hooks"]["BeforeTool"]) == 2' "$(cfg gemini)" \
+  && ok "gemini preserves explicit global opt-out and existing handlers" || bad "gemini preserves explicit global opt-out and existing handlers"
+fresh; mkdir -p "$H/.gemini"
+printf '{"ide":{"enabled":true}}' > "$(cfg gemini)"
+run --tool codex >/dev/null; run --tool gemini >/dev/null
 # 4 the shared skill stays while another tool still uses it
 run --tool gemini uninstall >/dev/null
 [ -f "$H/.agents/skills/app-store-compliance/SKILL.md" ] && ok "the shared skill stays while codex still uses it" || bad "the shared skill stays while codex still uses it"
@@ -482,13 +495,13 @@ APP="$WORK/app$RANDOM"; mkdir -p "$APP/App"; printf '<plist><dict></dict></plist
 OUT="$(env HOME="$H" bash "$H/.codex/hooks/app-store-compliance-guard.sh" "$APP" 2>&1)"
 grep -q "Regulatory Compliance Deadline Status" <<<"$OUT" && ok "the codex guard finds the deadline list in ~/.agents/skills" || bad "the codex guard finds the deadline list in ~/.agents/skills"
 
-# 6b release-audit.py run from the shared skill finds the guard installed under the tool's own folder
+# 6b release-audit.py uses the guard bundled into the skill
 fresh; run --tool codex >/dev/null
 OUT="$(env -u APP_STORE_GUARD_PATH HOME="$H" python3 "$H/.agents/skills/app-store-compliance/scripts/release-audit.py" "$APP" 2>&1)"
-grep -qF "Guard. $H/.codex/hooks/app-store-compliance-guard.sh" <<<"$OUT" && ok "release-audit in the shared skill finds the codex guard" || { bad "release-audit in the shared skill finds the codex guard"; echo "$OUT" | grep -i guard | head -3; }
+grep -qF "Guard. $H/.agents/skills/app-store-compliance/agent-os/hooks/app-store-compliance-guard.sh" <<<"$OUT" && ok "release-audit in the shared skill finds its bundled guard" || { bad "release-audit in the shared skill finds its bundled guard"; echo "$OUT" | grep -i guard | head -3; }
 run --tool gemini >/dev/null; run --tool codex uninstall >/dev/null
 OUT="$(env -u APP_STORE_GUARD_PATH HOME="$H" python3 "$H/.agents/skills/app-store-compliance/scripts/release-audit.py" "$APP" 2>&1)"
-grep -qF "Guard. $H/.gemini/hooks/app-store-compliance-guard.sh" <<<"$OUT" && ok "after codex is removed release-audit uses the gemini guard" || bad "after codex is removed release-audit uses the gemini guard"
+grep -qF "Guard. $H/.agents/skills/app-store-compliance/agent-os/hooks/app-store-compliance-guard.sh" <<<"$OUT" && ok "after codex is removed the bundled guard remains" || bad "after codex is removed the bundled guard remains"
 rm -rf "$APP"
 
 # A preview rejects configs the matching install would not edit, without modifying them.
@@ -585,19 +598,15 @@ for plugdir in plugin plugins; do
     && ok "opencode uninstall preserves a local $plugdir file" || bad "opencode uninstall preserves a local $plugdir file (rc=$RC)"
 done
 
-# A plug-in path turned into a symlink is unlinked on uninstall, and the file it points to is kept.
+# Linked files are left untouched for install, doctor and uninstall.
 fresh; run --tool opencode >/dev/null
 plug="$(cfg opencode)"; moved="$WORK/moved-plugin.js"
 mv "$plug" "$moved" && ln -s "$moved" "$plug"
-run --tool opencode uninstall >/dev/null; RC=$?
-[ "$RC" -eq 0 ] && [ ! -e "$plug" ] && [ ! -L "$plug" ] && [ -f "$moved" ] && ok "opencode uninstall unlinks a symlinked plugin and keeps its target" || bad "opencode uninstall unlinks a symlinked plugin and keeps its target (rc=$RC)"
-
-# A dotfile-managed symlink to the installer's own plugin still reinstalls and passes doctor.
-fresh; run --tool opencode >/dev/null
-plug="$(cfg opencode)"; kept="$WORK/dotfiles-plugin.js"
-cp "$plug" "$kept" && rm -f "$plug" && ln -s "$kept" "$plug"
-OUT="$(run --tool opencode)"; RC1=$?; run --tool opencode doctor >/dev/null; RC2=$?
-[ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && ! grep -q 'not created by this installer' <<<"$OUT" && ok "opencode accepts a symlink to its own plugin" || bad "opencode accepts a symlink to its own plugin (rc=$RC1/$RC2)"
+for mode in install doctor uninstall; do
+  OUT="$(run --tool opencode "$mode" 2>&1)"; RC=$?
+  [ "$RC" -eq 1 ] && [ -L "$plug" ] && [ -f "$moved" ] && grep -q 'linked install path' <<<"$OUT" \
+    && ok "opencode $mode refuses a linked plugin and preserves its target" || bad "opencode $mode refuses a linked plugin (rc=$RC)"
+done
 
 # An editor that saves the plugin with a byte order mark does not make it look user-owned.
 fresh; run --tool opencode >/dev/null

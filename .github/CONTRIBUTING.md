@@ -68,7 +68,7 @@ Priority 5: Social Media and AI Summaries
 3. Run the two checks below. Both must pass.
 
 ```
-python3 scripts/verify-citations.py --files <the file you changed>
+python3 scripts/verify-citations.py --online --files <the file you changed>
 python3 scripts/check-docs.py
 ```
 

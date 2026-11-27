@@ -38,6 +38,25 @@ guard_bundle_file() {
   return 1
 }
 
+# These are the reviewed executable helpers for this guard. Changing either
+# script requires updating its digest here. Compare text using LF line endings
+# so a Windows checkout can use the same release.
+guard_verified_helper() {
+  local name="$1" expected path
+  case "$name" in
+    scripts/deadline-checker.py) expected=54ac1a9a33a22db88ca93058417be51657e2a7dcccc8fddbba5d60faf0c86d9c ;;
+    scripts/validate-privacy-manifest.py) expected=3c1fa4dbac899d4bed3f5c9618b48778dfe4bf92452568aaa046f28fd8941fa3 ;;
+    *) return 1 ;;
+  esac
+  path="$(guard_bundle_file "$name")" || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -I -S -c 'import hashlib, pathlib, sys
+data = pathlib.Path(sys.argv[1]).read_bytes().replace(b"\r\n", b"\n")
+raise SystemExit(hashlib.sha256(data).hexdigest() != sys.argv[2])' "$path" "$expected" 2>/dev/null || return 1
+  printf '%s\n' "$path"
+}
+
+
 CRIT=0; HIGH=0; MED=0; ANY_IOS=0; ANY_AND=0; ANY_NATIVE=0; ANY_RN=0; ANY_WEB=0; ANY_NEEDS_NATIVE=0; NATIVE_HINT=""; UNCHECKED=""; EXPO_READ=0
 FILELIST=""
 WORK_DIR=""
@@ -1234,7 +1253,7 @@ PBXPY
   # A manifest that exists can still be internally inconsistent. Apple validates
   # these keys at upload and rejects by email (ITMS-91xxx) after processing, so
   # the binary installs from TestFlight and is still barred from review.
-  MANIFEST_VALIDATOR="$(guard_bundle_file scripts/validate-privacy-manifest.py)" || MANIFEST_VALIDATOR=""
+  MANIFEST_VALIDATOR="$(guard_verified_helper scripts/validate-privacy-manifest.py)" || MANIFEST_VALIDATOR=""
   if [ -n "$MANIFEST_VALIDATOR" ] && command -v python3 >/dev/null 2>&1; then
     # Same exclusions as the source file list. A pod's manifest is the vendor's job, a Tests fixture never ships.
     : > "$FILELIST.manifest" 2>/dev/null || SCAN_ERROR="the privacy manifest results could not be written to $FILELIST.manifest"
@@ -1246,7 +1265,7 @@ PBXPY
       ${NESTED_PRUNE[@]+"${NESTED_PRUNE[@]}"} \) -prune \) \
       -o -name 'PrivacyInfo.xcprivacy' -print 2>/dev/null \
       | while IFS= read -r manifest; do
-          python3 -I "$MANIFEST_VALIDATOR" "$manifest" 2>/dev/null
+          python3 -I -S "$MANIFEST_VALIDATOR" "$manifest" 2>/dev/null
         done > "$FILELIST.manifest" 2>/dev/null || true
     if [ -s "$FILELIST.manifest" ]; then
       while IFS="$(printf '\t')" read -r sev id msg; do
@@ -1256,7 +1275,7 @@ PBXPY
     fi
     rm -f "$FILELIST.manifest" 2>/dev/null || true
   elif find_app 12 -name 'PrivacyInfo.xcprivacy' | grep . >/dev/null; then
-    finding medium "APPLE-MANIFEST-VALIDATOR-UNAVAILABLE" "Privacy manifests present but python3 or scripts/validate-privacy-manifest.py is missing, so their internals were not validated" "Use a trusted playbook checkout or installed skill with python3, or run plutil -lint on each manifest by hand."
+    finding medium "APPLE-MANIFEST-VALIDATOR-UNAVAILABLE" "Privacy manifests present but the reviewed validator is unavailable or changed, so their internals were not validated" "Use a trusted playbook checkout or installed skill with python3, or run plutil -lint on each manifest by hand."
   fi
   [ "$IS_UNITY" -eq 1 ] || grep_has 'ITSAppUsesNonExemptEncryption' || finding high "APPLE-EXPORT-COMPLIANCE-MISSING" "ITSAppUsesNonExemptEncryption not set" "Set it in Info.plist or the build stalls in Missing Compliance and never reaches review."
   # Native StoreKit keeps the original restore list. A plugin's own restore call only counts for a plugin app.
@@ -2145,15 +2164,15 @@ READINESS_EOF
 # The deadline list prints after the findings, and only for the stores this project ships to (issue #842).
 print_deadlines() {
   local py plats=""
-  if ! py="$(guard_bundle_file scripts/deadline-checker.py)"; then
-    echo "Regulatory deadline list skipped. Playbook helper unavailable; see the regulatory checklist."
+  if ! py="$(guard_verified_helper scripts/deadline-checker.py)"; then
+    echo "Regulatory deadline list skipped. Playbook helper unavailable or changed; see the regulatory checklist."
     return 0
   fi
   echo ""
   if ! tool_ok python3 -I -c pass; then echo "Regulatory deadline list skipped. python3 not found."; return 0; fi
   [ "$ANY_IOS" -eq 1 ] && plats="ios"
   [ "$ANY_AND" -eq 1 ] && plats="${plats:+$plats,}android"
-  if [ -n "$plats" ]; then python3 -I "$py" --brief --platforms "$plats"; else python3 -I "$py" --brief; fi
+  if [ -n "$plats" ]; then python3 -I -S "$py" --brief --platforms "$plats"; else python3 -I -S "$py" --brief; fi
 }
 
 echo "== App Store Compliance Guard =="

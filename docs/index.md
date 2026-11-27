@@ -11,7 +11,7 @@ description: How to avoid common App Store and Google Play rejections. Rejection
 - **117 tracked deadlines** across 34 jurisdictions and platform scopes, including the EU AI Act, the Digital Services Act, COPPA and US state age laws.
 - **A pre-submission guard** that runs locally or inside AI coding tools like Claude Code, Codex and Cursor.
 - **An honest split** between what the scan proves and what only a person can check, in [What the scan proves](WHAT-THE-SCAN-PROVES.md). A clean scan is not an approval.
-- Free to read. Source on [GitHub](https://github.com/mjmirza/app-store-compliance).
+- Free to read. Fork source on [GitHub](https://github.com/RENEGADE21AI/app-store-compliance).
 
 ## Start here
 
@@ -62,8 +62,8 @@ git clone https://github.com/RENEGADE21AI/app-store-compliance ~/repositories/ap
 bash ~/repositories/app-store-compliance/agent-os/hooks/app-store-compliance-guard.sh "/path/to/your/app"
 ```
 
-Maintained by [Mirza Iqbal](https://github.com/mjmirza). Not affiliated with Apple or Google. App Store is a trademark of Apple Inc. Google Play is a trademark of Google LLC.
+Original playbook by [Mirza Iqbal](https://github.com/mjmirza). Not affiliated with Apple or Google. App Store is a trademark of Apple Inc. Google Play is a trademark of Google LLC.
 
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"App Store Compliance Playbook","description":"Open playbook and pre-submission guard to stop App Store and Google Play rejections.","codeRepository":"https://github.com/mjmirza/app-store-compliance","programmingLanguage":["Shell","Python"],"author":{"@type":"Person","name":"Mirza Iqbal","url":"https://github.com/mjmirza"},"keywords":"App Store rejection, Google Play rejection, app review guidelines, privacy manifest, Data safety, account deletion, EU AI Act, COPPA"}
+{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"App Store Compliance Playbook","description":"Open playbook and pre-submission guard to stop App Store and Google Play rejections.","codeRepository":"https://github.com/RENEGADE21AI/app-store-compliance","programmingLanguage":["Shell","Python"],"author":{"@type":"Person","name":"Mirza Iqbal","url":"https://github.com/mjmirza"},"keywords":"App Store rejection, Google Play rejection, app review guidelines, privacy manifest, Data safety, account deletion, EU AI Act, COPPA"}
 </script>

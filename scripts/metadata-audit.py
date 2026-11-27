@@ -18,13 +18,16 @@ Usage:
     metadata-audit.py <metadata-dir>            audit a directory
     metadata-audit.py --name "..." --keywords "..." --description "..."   audit fields
     metadata-audit.py <dir> --propose           write <dir>/.metadata-fixes.md with suggested fixes
-    metadata-audit.py <dir> --check-urls        also HEAD-check URLs (needs network)
+    metadata-audit.py <dir> --check-urls        HEAD-check only privacy_url, support_url,
+                                              marketing_url and terms_url (needs network)
     metadata-audit.py <dir> --platform google   use the Google Play limits and rules (default apple)
 
 Every locale folder is audited on its own and each finding names its locale.
 A folder named android in the path is audited with the Google rules unless
 --platform is given.
 
+Network checks require public hosts, do not follow redirects, and download no bodies.
+Links inside descriptions, release/review notes and other text are never requested.
 Exit codes: 0 clean or advisory, 1 the directory held nothing to audit, 2 a critical finding.
 """
 
@@ -34,6 +37,10 @@ import sys
 import re
 import json
 import glob
+import ipaddress
+import socket
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 FIELD_LIMITS = {
@@ -115,14 +122,22 @@ def add(findings, sev, rule, field, msg, fix):
 
 
 def url_syntax_ok(u):
-    """True when u is an http or https URL with a host."""
+    """Validate an HTTP(S) URL and port without DNS or network access."""
     u = (u or "").strip()
     try:
         p = urlparse(u)
         host = p.hostname
+        port = p.port
     except ValueError:
         return False
-    return p.scheme in ("http", "https") and bool(host) and " " not in u
+    return (
+        p.scheme in ("http", "https")
+        and bool(host and host.strip("."))
+        and not any(ch.isspace() for ch in u)
+        and "\\" not in host
+        and p.username is None and p.password is None
+        and (port is None or 1 <= port <= 65535)
+    )
 
 
 def is_terms_url(u):
@@ -417,46 +432,71 @@ def audit_fields(fields, check_urls=False, platform="apple"):
                 )
                 break
 
-    # unreachable URLs
+    # Explicit network scope: public listing URL fields only, never review notes
+    # or arbitrary links embedded in listing text.
     if check_urls:
-        urls = set()
-        for v in fields.values():
-            urls.update(re.findall(r"https?://[^\s)\"']+", v or ""))
-        for u in sorted(u for u in urls if not url_syntax_ok(u)):
-            add(
-                findings,
-                "high",
-                "BOTH-UNREACHABLE-METADATA-URL",
-                "url",
-                f"URL is malformed: {u}",
-                "Fix or remove the broken URL before submission",
-            )
-        for u in sorted(u for u in urls if url_syntax_ok(u)):
-            ok = _url_ok(u)
-            if ok is False:
+        for field in URL_FIELDS:
+            u = fields.get(field, "").strip()
+            if not u or not url_syntax_ok(u):
+                continue  # Already covered by offline syntax validation above.
+            problem = _url_error(u)
+            if problem:
                 add(
                     findings,
                     "high",
                     "BOTH-UNREACHABLE-METADATA-URL",
-                    "url",
-                    f"URL does not load: {u}",
-                    "Fix or remove the broken URL before submission",
+                    field,
+                    f"URL reachability unverified: {u} ({problem})",
+                    "Verify the public final URL; redirects are not followed by this checker",
                 )
 
     return findings
 
 
-def _url_ok(u):
-    try:
-        import urllib.request
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
+
+def _url_error(u):
+    """Return a diagnostic, or None for a successful public HEAD response."""
+    if not url_syntax_ok(u):
+        return "invalid HTTP(S) scheme, host, port or embedded credentials"
+    parsed = urlparse(u)
+    host = parsed.hostname.rstrip(".").lower()
+    if host == "localhost" or host.endswith((".localhost", ".local")):
+        return "public host required; local host was not contacted"
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not literal.is_global:
+        return "public address required; non-public address was not contacted"
+    try:
+        answers = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        addresses = {ipaddress.ip_address(answer[4][0]) for answer in answers}
+    except (OSError, ValueError):
+        return "public host could not be resolved"
+    if not addresses or any(not address.is_global for address in addresses):
+        return "public addresses required; non-public DNS result was not contacted"
+    try:
         req = urllib.request.Request(
             u, method="HEAD", headers={"User-Agent": "metadata-audit"}
         )
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return 200 <= r.status < 400
-    except Exception:
-        return False
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=8) as r:
+            return None if 200 <= r.status < 300 else f"HTTP {r.status}"
+    except urllib.error.HTTPError as error:
+        code = error.code
+        error.close()
+        return f"HTTP {code}; redirect not followed" if 300 <= code < 400 else f"HTTP {code}"
+    except (OSError, ValueError):
+        return "request failed or timed out"
+
+
+def _url_ok(u):
+    """Compatibility helper; failed or unverified checks remain false."""
+    return _url_error(u) is None
 
 
 def _read_text(path):

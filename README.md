@@ -12,7 +12,7 @@ Upstream documentation is available at [mjmirza.github.io/app-store-compliance](
 [![Google Play](https://img.shields.io/badge/Google_Play-414141?logo=googleplay&logoColor=white)](https://play.google/developer-content-policy/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-ready-000000?logo=anthropic&logoColor=white)](#how-you-actually-use-this)
 [![OpenRoots ORA 2.3](https://openroots.org/badge/ora.svg)](https://openroots.org/licenses/ora/2.3)
-[![CI](https://img.shields.io/github/actions/workflow/status/mjmirza/app-store-compliance/ci.yml?branch=main&label=CI)](https://github.com/mjmirza/app-store-compliance/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/RENEGADE21AI/app-store-compliance/ci.yml?branch=main&label=CI)](https://github.com/RENEGADE21AI/app-store-compliance/actions)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-2ea44f)](.github/CONTRIBUTING.md)
 
 </div>
@@ -58,7 +58,7 @@ If it saves you one rejection, it has paid for the ten minutes it takes to read.
 
 ## Install it into your AI coding tool
 
-This puts the check in front of every submit. Your agent runs the guard before any submit command, such as an upload to App Store Connect or Google Play, and stops the command when a critical rejection risk stands. For a one-time scan, skip this section and use Start here.
+Persistent installation registers a local hook for the selected tool. Linked managed paths are refused, and Windows installs require Python 3 for path checks. Your agent runs the guard before any submit command, such as an upload to App Store Connect or Google Play, and stops the command when a critical rejection risk stands. For a one-time scan, skip this section and use Start here.
 
 One command per tool, about a minute. Needs git and bash. Every tool other than Claude Code also needs python3.
 
@@ -93,7 +93,7 @@ What it writes, so you can check it.
 - The guard, into that tool's own folder, for example `~/.codex/hooks/` or `~/.gemini/hooks/`.
 - The skill. Claude Code reads it from `~/.claude/skills/` and Kiro from `~/.kiro/skills/`. Every other tool reads one shared copy in `~/.agents/skills/`.
 - One hook entry in that tool's config (`~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.gemini/settings.json`, `~/.cursor/hooks.json`, `~/.copilot/hooks/` or `$COPILOT_HOME/hooks/`), or for OpenCode one plugin file in `~/.config/opencode/plugins/`. Every other setting is kept, and a dated backup sits next to a file that already existed. A config that is not valid JSON or repeats a key is never rewritten. You get the exact block to paste instead.
-- For Gemini CLI it also turns on `tools.enableHooks`, which Gemini needs before version 0.26 to run any hook.
+- For Gemini CLI, global hook settings are preserved. Older Gemini builds may need the owner to enable hooks after reviewing existing handlers.
 - For Kimi Code it appends one marked `[[hooks]]` block to `~/.kimi-code/config.toml` (or `$KIMI_CODE_HOME/config.toml`) and never rewrites or prints the rest of that file, which can hold API keys. Uninstall removes exactly that block.
 - For Kiro it writes one standalone `v1` hook file at `~/.kiro/hooks/app-store-compliance.json`, keeping any other hook already in it, with a `PreToolUse` matcher that covers Kiro's `shell`, `execute_bash`, `execute_pwsh` and `execute_cmd` tools. A matcher you change to another form that still covers them, such as `shell` or `@builtin`, is kept, and so is a `timeout` of 0. Kiro reads a global hook from `~/.kiro/hooks/` only on CLI V3.
 - For Factory Droid it writes to `~/.factory/settings.json` when your hooks already live there, because Droid ignores them once `~/.factory/hooks.json` exists.
@@ -139,37 +139,11 @@ Each command ends with one line that tells you whether it worked. Add `--tool <n
 | `install.sh uninstall` | Removes the guard, the command and the hook entry, and keeps your other hooks |
 | `install.sh --version` | Prints the version of this checkout. `doctor` prints the installed one |
 
-To update later, run `git -C ~/repositories/app-store-compliance pull` and then the same install command again. On Windows, run it from Git Bash. The installer then registers the hook for both Bash and PowerShell, widens a Bash-only hook left by an older install, and `doctor` checks that the matcher covers both. Copilot gets a `powershell` handler next to its `bash` one.
+To update later, review the incoming revision before repeating the selected install command. On Windows, run it from Git Bash. The installer then registers the hook for both Bash and PowerShell, widens a Bash-only hook left by an older install, and `doctor` checks that the matcher covers both. Copilot gets a `powershell` handler next to its `bash` one.
 
-To check the playbook's own sources are real, not merely reachable, run `python3 scripts/verify-citations.py --files docs/ data/` from the checkout. It takes a few minutes and needs network access.
+To check whether the playbook's public citation links respond, run `python3 scripts/verify-citations.py --online --files docs/ data/` from the checkout. Verify a claim against the source text separately.
 
 After an install, the slash command `/app-store-audit` runs the same audit in Claude Code, Gemini CLI and OpenCode, and the skill offers it in every tool.
-
-## It works. Approved on the first try
-
-A developer on Reddit ran only the one time check above, with no install, before submitting. The audit surfaced weaknesses they had not caught. They fixed them, and the app went through on the first attempt.
-
-<div align="center">
-
-<img src="assets/first-try-approval.png" alt="Reddit thread in which a developer reports that after running the one time check and fixing what it found, their app was approved on the first attempt" width="640" />
-
-</div>
-
-> It noticed some weaknesses in my submission that I was able to fix. [...] My app was approved on first try!
-
-The same thread is worth reading for the part that is not praise. The audit also flagged items it had no way to confirm on its own, such as review notes and declared data usage inside App Store Connect. Those reads look like false positives. They are deliberate. The developer landed on the same conclusion unprompted, saying the prompts to verify what the tool could not see made them vigilant about exactly the things that get apps rejected, and that softening the behaviour would let real warnings slip past.
-
-An item that cannot be verified is surfaced rather than assumed clean. A missed warning costs a rejection. A surfaced one costs a minute.
-
-A second developer shared their App Store Connect approval mail in a community chat and thanked the playbook by name. The sender's name is removed. The message is in German.
-
-<div align="center">
-
-<img src="assets/app-store-approval-thanks.png" alt="Chat message showing an App Store Connect mail that says the app Aura Text to Speech Reader has been approved for distribution, followed by a German message thanking Mirza Iqbal for the compliance repo" width="420" />
-
-</div>
-
-> I just got the mail from the Apple Store that my app is "finally" approved! [...] Thanks for your compliance repo.
 
 ## Why this is urgent right now (2026)
 
@@ -297,7 +271,7 @@ Every rule in this playbook is only as good as the source behind it, so the
 citations are machine-verified rather than trusted.
 
 ```
-python3 scripts/verify-citations.py --files docs/ data/ references/ scripts/
+python3 scripts/verify-citations.py --online --files docs/ data/ references/ scripts/
 ```
 
 An HTTP 200 is not proof of a real page. Apple serves a byte-identical news
@@ -324,7 +298,7 @@ python3 scripts/deadline-checker.py
 | The guard does not fire in Codex | Run `/hooks` in Codex and approve the app-store-compliance hook. Codex runs no new or changed hook until you approve it. Then run `install.sh --tool codex doctor` |
 | The guard does not fire in Gemini CLI | Restart Gemini CLI. Check that `tools.enableHooks` is true in `~/.gemini/settings.json`. Then run `install.sh --tool gemini doctor` |
 | The install for any tool other than Claude Code says python3 is needed | Install python3, then run the same command again |
-| `verify-citations.py` seems stuck | It checks about 300 links over the network and prints at the end. Give it a few minutes |
+| `verify-citations.py` seems stuck | With `--online`, it checks many public citation links and prints a summary at the end. Give it a few minutes |
 | A demo or example app inside your app is scanned with it | A nested Xcode or Android project in a folder named exactly demo, example, sample, or playground (or the plural) stays part of the root's scan. Any other nested app (an `.xcodeproj` or an Android application module) with its own Info.plist or AndroidManifest.xml, that no root build file names, is scanned as its own app when the root has its own project for that platform. A native host that embeds the framework stays with the root, and a split app keeps every framework check the pooled tree showed. To scan a nested app alone, point the guard at its folder |
 | `accessibility-audit.py` says Clean | It is a static scan. It computes no contrast ratio for icons and other non-text elements and does not check focus order in custom controls. It reads a Button label without running the code, so anything written inside the label counts, shown or not. A Text, a Label, or the word accessibilityLabel anywhere in it hides a possible icon-only Button, and an Image(systemName:) that is never shown can still raise one. Regex literals are skipped only in the #/.../# form, not bare /.../. Test those with VoiceOver, TalkBack, and Accessibility Inspector |
 
@@ -375,7 +349,7 @@ python3 scripts/deadline-checker.py
 | `data/regulatory-deadlines.json` | Global regulatory deadline database (jurisdiction, law, effective/grace/mandatory/enforcement dates), read by `scripts/deadline-checker.py` |
 | `agent-os/skill/SKILL.md` | An agent skill that runs a full pre submission compliance audit |
 | `agent-os/hooks/app-store-compliance-guard.sh` | The tested pre submission guard, usable standalone or as an agent hook |
-| `scripts/verify-citations.py` | Verifies every cited URL resolves to real content, catching soft-404 pages that return HTTP 200 |
+| `scripts/verify-citations.py` | Lists citation URLs by default. With `--online`, checks public HTTP responses and identifies incomplete coverage. |
 | `scripts/monitor-privacy.py` | Monitors mobile and web privacy requirements across Apple, Google, and EU sources |
 | `scripts/monitor-security.py` | Monitors 17 mobile security requirements, matching real API symbols in your code |
 | `scripts/generate-timeline.py` | Compiles a chronological regulatory timeline from the deadline database |
@@ -404,7 +378,7 @@ Treat the store reviewer as an adversarial integration test that runs once, on a
 
 ## Contributing
 
-Contributions are welcome and wanted. App store rules change constantly, and this playbook stays accurate only when many practitioners keep it current. Open an issue or a pull request, and look for issues labelled good first issue. See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md). The roadmap, every open deadline milestone, and what is in progress live on the [project board](https://github.com/users/mjmirza/projects/3). The one standard. every factual claim traces to a live Apple or Google source, and no guideline number or statistic is ever invented.
+Contributions are welcome and wanted. App store rules change constantly, and this playbook stays accurate only when many practitioners keep it current. Open an issue or a pull request, and look for issues labelled good first issue. See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md). The upstream roadmap and its open deadline milestones are on the [upstream project board](https://github.com/users/mjmirza/projects/3). The one standard. every factual claim traces to a live Apple or Google source, and no guideline number or statistic is ever invented.
 
 ## Logo attribution
 

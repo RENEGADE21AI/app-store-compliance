@@ -61,7 +61,7 @@ run_harness() {
     return 1
   fi
   local args=("$1" "$MODE"); [ "$DRY" -eq 1 ] && args+=(--dry-run); [ -n "$REPO_DIR" ] && args+=(--repo "$REPO_DIR")
-  python3 "$REPO/scripts/install_harness.py" "${args[@]}"
+  python3 -I "$REPO/scripts/install_harness.py" "${args[@]}"
 }
 if [ "$TOOL" = "all" ] && [ "$MODE" != "help" ] && [ "$MODE" != "version" ]; then
   found=""; rc_all=0
@@ -134,8 +134,8 @@ import json, os, re, shutil, sys, tempfile, time
 path, cmd, name, action = sys.argv[1:5]
 spots = list(sys.argv[5:7])
 spots += [h + s[2:] for s in list(spots) if s.startswith("~/") for h in ("$HOME/", "${HOME}/")]
-real = os.path.realpath(path)
-exists = os.path.exists(real)
+real = path
+exists = os.path.exists(path)
 data = {}
 if exists:
     try:
@@ -245,7 +245,9 @@ if not changed:
 folder = os.path.dirname(real) or "."
 os.makedirs(folder, exist_ok=True)
 if exists:
-    shutil.copy2(real, path + ".bak-" + time.strftime("%Y%m%d-%H%M%S") + "-" + str(os.getpid()))
+    fd, backup = tempfile.mkstemp(dir=folder, prefix=os.path.basename(path) + ".bak-")
+    os.close(fd)
+    shutil.copy2(path, backup)
 fd, tmp = tempfile.mkstemp(dir=folder, prefix=".settings-")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -257,7 +259,7 @@ PY
     return $?
   fi
   if have jq -n true; then
-    local cur tmp
+    local cur tmp backup
     if [ -s "$SETTINGS" ]; then cur="$SETTINGS"; else cur=""; fi
     if [ -n "$cur" ]; then
       jq -e 'type == "object" and ((.hooks // {}) | type == "object") and ((.hooks.PreToolUse // []) | type == "array") and ((.hooks.PreToolUse // []) | all(type == "object" and ((.hooks // []) | type == "array")))' "$cur" >/dev/null 2>&1 || return 4
@@ -270,7 +272,7 @@ PY
     if [ "$action" = "add" ]; then
       [ "$present" -eq 0 ] && return 3
       mkdir -p "$CONF"; tmp="$(mktemp "$CONF/.settings-XXXXXX")" || return 4
-      if [ -n "$cur" ]; then cp -p "$cur" "$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"; else cur="/dev/null"; fi
+      if [ -n "$cur" ]; then backup="$(mktemp "$CONF/settings.json.bak-XXXXXX")" && cp -p "$cur" "$backup" || return 4; else cur="/dev/null"; fi
       if [ "$cur" = "/dev/null" ]; then printf '{}' > "$tmp.in"; cur="$tmp.in"; fi
       # An owned entry on a narrower matcher is dropped first, so the widened one never duplicates it.
       jq --arg c "$HOOK_CMD" --arg m "$MATCHER" --arg g "$GUARD" --arg t "$SHOWN/hooks/$GUARD_NAME" '.hooks.PreToolUse = (((.hooks.PreToolUse // []) | map(.hooks |= map(select((.command? // "" | tostring | (. as $x | $x == $c or ([$g, $t] | any(. as $s | $x == "bash " + $s or $x == "bash \u0027" + $s + "\u0027" or $x == "bash \"" + $s + "\"")))) | not)) | select((.hooks | length) > 0))) + [{matcher: $m, hooks: [{type: "command", command: $c, timeout: 120}]}])' "$cur" > "$tmp" || { rm -f "$tmp" "$tmp.in"; return 4; }
@@ -280,7 +282,7 @@ PY
     [ -n "$cur" ] && jq -e --arg hc "$HOOK_CMD" --arg g "$GUARD" --arg t "$SHOWN/hooks/$GUARD_NAME" '[.hooks.PreToolUse[]? | .hooks[]?.command? // "" | tostring | select(. as $c | $c == $hc or ([$g, $t] | any(. as $s | $c == "bash " + $s or $c == "bash \u0027" + $s + "\u0027" or $c == "bash \"" + $s + "\"")))] | length > 0' "$cur" >/dev/null 2>&1 && present=0
     [ "$present" -ne 0 ] && return 3
     tmp="$(mktemp "$CONF/.settings-XXXXXX")" || return 4
-    cp -p "$cur" "$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
+    backup="$(mktemp "$CONF/settings.json.bak-XXXXXX")" && cp -p "$cur" "$backup" || return 4
     jq --arg hc "$HOOK_CMD" --arg g "$GUARD" --arg t "$SHOWN/hooks/$GUARD_NAME" '.hooks.PreToolUse |= (map(.hooks |= map(select((.command? // "" | tostring | (. as $c | $c == $hc or ([$g, $t] | any(. as $s | $c == "bash " + $s or $c == "bash \u0027" + $s + "\u0027" or $c == "bash \"" + $s + "\"")))) | not))) | map(select((.hooks | length) > 0)))' "$cur" > "$tmp" || { rm -f "$tmp"; return 4; }
     mv "$tmp" "$SETTINGS"; return 0
   fi
@@ -336,7 +338,7 @@ verify() {
     fi
   fi
   local missing="" p
-  for p in SKILL.md data/rejection-patterns.json data/regulatory-deadlines.json docs/PRE-SUBMISSION-CHECKLIST.md references scripts/deadline-checker.py scripts/validate-privacy-manifest.py templates .citation-allowlist; do
+  for p in SKILL.md data/rejection-patterns.json data/regulatory-deadlines.json docs/PRE-SUBMISSION-CHECKLIST.md references scripts/deadline-checker.py scripts/validate-privacy-manifest.py templates .citation-allowlist "agent-os/hooks/$GUARD_NAME"; do
     [ -e "$SKILL/$p" ] || missing="$missing $p"
   done
   if [ -z "$missing" ]; then good "skill payload complete at $SHOWN/skills/app-store-compliance"; else fail "skill payload is missing.$missing"; fi
@@ -396,8 +398,8 @@ do_install() {
     exit 0
   fi
   say "Installing the App Store Compliance Playbook into $SHOWN"
-  mkdir -p "$CONF/hooks" "$SKILL" "$CONF/commands" || { echo "Cannot write to $CONF" >&2; exit 1; }
-  cp "$GUARD_SRC" "$GUARD" && chmod +x "$GUARD"
+  mkdir -p "$CONF/hooks" "$SKILL/agent-os/hooks" "$CONF/commands" || { echo "Cannot write to $CONF" >&2; exit 1; }
+  cp "$GUARD_SRC" "$GUARD" && chmod +x "$GUARD" && cp "$GUARD_SRC" "$SKILL/agent-os/hooks/$GUARD_NAME" || return 1
   cp "$REPO/agent-os/skill/SKILL.md" "$SKILL/SKILL.md"
   cp "$REPO/.citation-allowlist" "$SKILL/.citation-allowlist"
   [ -f "$REPO/VERSION" ] && cp "$REPO/VERSION" "$SKILL/VERSION"
@@ -439,6 +441,34 @@ do_uninstall() {
     3) say "Removed the guard, the skill and the slash command. No hook entry was registered." ;;
   esac
 }
+
+# Python handles file links including Windows junctions. The jq-only
+# installer can use the equivalent link check on Unix.
+check_claude_destinations() {
+  if have python3 -I -c pass; then
+    python3 -I "$REPO/scripts/install_harness.py" --check-claude-paths "$CONF"
+    return $?
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    CYGWIN*|MINGW*|MSYS*) fail "Python 3 is needed to check Windows install paths."; return 1 ;;
+  esac
+  have jq -n true || { fail "Python 3 or jq is required for a checked install."; return 1; }
+  local p
+  for p in "$CONF" "$SETTINGS" "$CONF/hooks" "$GUARD" "$CONF/commands" "$CMD_FILE" \
+    "$CONF/skills" "$SKILL" "$SKILL/SKILL.md" "$SKILL/VERSION" "$SKILL/.citation-allowlist" \
+    "$SKILL/agent-os" "$SKILL/agent-os/hooks" "$SKILL/agent-os/hooks/$GUARD_NAME" \
+    "$SKILL/docs" "$SKILL/data" "$SKILL/references" "$SKILL/templates" "$SKILL/scripts"; do
+    if [ -L "$p" ] || { [ -f "$p" ] && [ -n "$(find "$p" -prune -links +1 -print 2>/dev/null)" ]; }; then
+      fail "Cannot use this install layout. Linked install path: $p"
+      return 1
+    fi
+  done
+}
+if [ "$DRY" -eq 0 ]; then
+  case "$MODE" in
+    install|uninstall|doctor) check_claude_destinations || exit 1 ;;
+  esac
+fi
 
 case "$MODE" in
   version) printf 'app-store-compliance %s\n' "$(cat "$REPO/VERSION" 2>/dev/null || echo unknown)" ;;

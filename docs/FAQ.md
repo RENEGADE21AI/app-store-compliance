@@ -149,7 +149,7 @@ Discussion. [#2354](https://github.com/mjmirza/app-store-compliance/discussions/
 It checks a dated snapshot, and tells you how old it is.
 
 - Every report opens with a `Rule pack.` line, the version and the oldest and newest date its sources were verified. Past 60 days it prints `Rule pack STALE`.
-- Every deadline in `data/regulatory-deadlines.json` records its source URL and the day it was verified, and its `source_note` says plainly when the source is secondary or the primary text was not read. `scripts/verify-citations.py` checks that cited pages respond and are not soft 404s, and reports blocked or failing pages for follow-up.
+- Every deadline in `data/regulatory-deadlines.json` records its source URL and the day it was verified, and its `source_note` says plainly when the source is secondary or the primary text was not read. `scripts/verify-citations.py --online` checks that cited pages respond and are not soft 404s, and reports blocked or failing pages for follow-up.
 - New rules have shipped within days. 2.5.0 added Apple's November developer emails, and 2.5.1 adds Apple's China mainland compliance declarations.
 - To update, run `git pull` in the repo, then the same install command again.
 

@@ -59,7 +59,7 @@ OUT="$($AUDIT --platform windows --name "Lumina" 2>&1)"; RC=$?
 [ "$RC" -eq 1 ] && grep -q 'apple or google' <<<"$OUT" && ok "an unknown platform exits 1" || bad "an unknown platform exits 1 (rc=$RC)"
 
 # URLs must be real http or https URLs before any network check.
-OUT="$($AUDIT --name 'Real App' --privacy_url nonsense --support_url https://real.app/help --check-urls 2>&1)"
+OUT="$($AUDIT --name 'Real App' --privacy_url nonsense --support_url https://real.app/help 2>&1)"
 grep -q 'INVALID-METADATA-URL' <<<"$OUT" && ! grep -q '^Clean' <<<"$OUT" && ok "a privacy url that is not a url is flagged" || bad "a privacy url that is not a url is flagged"
 OUT="$($AUDIT --name 'Real App' --privacy_url ftp://real.app/p --support_url https://real.app/help 2>&1)"
 grep -q 'INVALID-METADATA-URL' <<<"$OUT" && ok "a non http privacy url is flagged" || bad "a non http privacy url is flagged"
@@ -79,8 +79,8 @@ OUT="$($AUDIT --name Photos --description "Monthly subscription. Privacy policy 
 grep -q 'MISLEADING-PRICING' <<<"$OUT" && ok "a privacy link on a host named photos is not a Terms link" || bad "a privacy link on a host named photos is not a Terms link"
 OUT="$($AUDIT --description "Monthly subscription. More at https://legal.example.app/x" --privacy_url https://real.app/p --support_url https://real.app/help 2>&1)"
 grep -q 'MISLEADING-PRICING' <<<"$OUT" && ok "a legal-looking link without the word terms or EULA is still flagged" || bad "a legal-looking link without the word terms or EULA is still flagged"
-OUT="$($AUDIT --description "Read our policy at https:///privacy" --privacy_url https://real.app/p --support_url https://real.app/help --check-urls 2>&1)"
-grep -q 'BOTH-UNREACHABLE-METADATA-URL' <<<"$OUT" && ok "a malformed URL in the description is reported with --check-urls" || bad "a malformed URL in the description is reported with --check-urls"
+OUT="$($AUDIT --privacy_url https:///privacy --support_url https://real.app/help 2>&1)"
+grep -q 'BOTH-INVALID-METADATA-URL' <<<"$OUT" && ok "a malformed listing URL is reported without network access" || bad "a malformed listing URL is reported without network access"
 OUT="$($AUDIT --description "Monthly subscription." --promotional_text "Terms of Use https://journal.test/terms" --privacy_url https://journal.test/p --support_url https://journal.test/help 2>&1)"
 grep -q 'MISLEADING-PRICING' <<<"$OUT" && ok "a Terms link only in the promotional text is flagged" || bad "a Terms link only in the promotional text is flagged"
 OUT="$($AUDIT --description "Monthly subscription. Terms apply. Privacy https://tos.example/privacy" --privacy_url https://real.app/p --support_url https://real.app/help 2>&1)"
@@ -302,6 +302,96 @@ else
   bad "the combination limit never hides an individual conflicting value"
 fi
 rm -rf "$MC"
+
+# Public URL checks use mocked transport/DNS; no real networking is allowed.
+if python3 - "$HERE/metadata-audit.py" <<'PYTHON'
+import importlib.util
+import socket
+import sys
+import unittest
+from unittest.mock import patch
+import urllib.error
+
+spec = importlib.util.spec_from_file_location("metadata", sys.argv[1])
+metadata = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(metadata)
+
+
+class PublicURLChecks(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+        self.handlers = []
+        self.redirect = False
+        self.fields = {"name": "Journal", "privacy_url": "https://example.org/privacy", "support_url": "https://example.org/help"}
+        self.addCleanup(patch.stopall)
+        patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]).start()
+        patch("socket.create_connection", side_effect=AssertionError("Real sockets forbidden")).start()
+        patch("urllib.request.urlopen", side_effect=self.open).start()
+        patch("urllib.request.build_opener", side_effect=self.build).start()
+
+    def open(self, request, timeout):
+        self.requests.append((request.full_url, request.get_method()))
+        if self.redirect:
+            raise urllib.error.HTTPError(request.full_url, 302, "Found", {"Location": "http://127.0.0.1/private"}, None)
+
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self, *args): raise AssertionError("HEAD checks must not download bodies")
+        return Response()
+
+    def build(self, *handlers):
+        self.handlers.extend(handlers)
+        return self
+
+    def test_offline_validation_never_fetches(self):
+        metadata.audit_fields(self.fields)
+        self.assertEqual(self.requests, [])
+
+    def test_only_the_four_documented_listing_fields_are_requested(self):
+        fields = {**self.fields, "marketing_url": "https://example.org/app", "terms_url": "https://example.org/terms", "review_notes": "Private preview https://internal.example.org/review?token=secret", "description": "Read https://other.example.org/info", "release_notes": "Build https://ci.example.org/private"}
+        metadata.audit_fields(fields, check_urls=True)
+        self.assertEqual(sorted(self.requests), [("https://example.org/app", "HEAD"), ("https://example.org/help", "HEAD"), ("https://example.org/privacy", "HEAD"), ("https://example.org/terms", "HEAD")])
+
+    def test_direct_private_addresses_are_not_contacted(self):
+        for url in ["http://127.0.0.1/private", "http://10.0.0.1/private", "http://[::1]/private", "http://localhost/private"]:
+            with self.subTest(url=url):
+                self.requests.clear()
+                findings = metadata.audit_fields({**self.fields, "privacy_url": url}, check_urls=True)
+                self.assertEqual(self.requests, [("https://example.org/help", "HEAD")])
+                self.assertTrue(any(f["field"] == "privacy_url" and "public" in f["message"].lower() for f in findings), findings)
+
+    def test_public_hostname_resolving_privately_is_not_contacted(self):
+        with patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.2", 443))]):
+            findings = metadata.audit_fields(self.fields, check_urls=True)
+        self.assertEqual(self.requests, [])
+        self.assertTrue(any("public" in f["message"].lower() for f in findings), findings)
+
+    def test_redirects_are_unverified_and_not_followed(self):
+        self.redirect = True
+        findings = metadata.audit_fields(self.fields, check_urls=True)
+        self.assertEqual(len(self.requests), 2)
+        self.assertTrue(all("127.0.0.1" not in url for url, method in self.requests))
+        self.assertTrue(any("redirect" in f["message"].lower() for f in findings), findings)
+        self.assertTrue(self.handlers)
+        self.assertIsNone(self.handlers[0].redirect_request(None, None, 302, "Found", {}, "http://127.0.0.1/private"))
+
+    def test_invalid_scheme_host_port_and_credentials_are_flagged_offline(self):
+        for url in ["file:///tmp/private", "https:///privacy", "https://example.org:99999/privacy", "https://user:secret@example.org/privacy", "https://[bad]/privacy"]:
+            with self.subTest(url=url):
+                findings = metadata.audit_fields({**self.fields, "privacy_url": url})
+                self.assertTrue(any(f["rule"] == "BOTH-INVALID-METADATA-URL" and f["field"] == "privacy_url" for f in findings), findings)
+        self.assertEqual(self.requests, [])
+
+
+unittest.main(argv=["public-listing-url-checks"], verbosity=2)
+PYTHON
+then
+  ok "public listing URL boundaries (network mocked)"
+else
+  bad "public listing URL boundaries (network mocked)"
+fi
 
 echo "metadata-audit-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

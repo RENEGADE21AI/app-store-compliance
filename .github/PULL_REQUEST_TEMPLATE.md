@@ -23,7 +23,7 @@ If this PR adds no factual claims, write "none, no new claims".
 
 ```
 python3 scripts/validate.py
-python3 scripts/verify-citations.py --files docs/ data/
+python3 scripts/verify-citations.py --online --files docs/ data/
 ```
 
 ## What still fires
@@ -39,7 +39,7 @@ could now miss and why that is acceptable. Docs or data only? Write "no check ch
 - [ ] Every guideline number, date, and statistic here traces to a source above. Nothing is from memory
 - [ ] No simulate-mode or sample monitor output is committed as if it were a real announcement
 - [ ] This is not a point-in-time generated report. Generated snapshots go stale, the generator is what belongs in the repo
-- [ ] No emoji, and no AI-assistant attribution in the commits
+- [ ] Disclose material AI assistance in the pull request description
 
 ## Anything a reviewer should look at first
 

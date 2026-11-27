@@ -11,11 +11,14 @@ exit "${ASC_STATUS:-0}"
 ASC
 cat > "$T/bin/curl" <<'CURL'
 #!/bin/bash
+read -r header
+[ "$header" = "Authorization: Bearer fixture" ] || exit 98
+[ -z "${GOOGLE_ACCESS_TOKEN:-}" ] || exit 98
 case "$*" in
   *'-X POST '*) printf '{"id":"fixture-edit"}\n' ;;
-  *'-X DELETE '*) printf 'delete\n' >> "$CALLS" ;;
+  *'-X DELETE '*) printf 'delete\n' >> "$CALLS"; exit "${DELETE_STATUS:-0}" ;;
   *'/listings')
-    case "$LISTINGS_MODE" in
+    case "${LISTINGS_MODE:-good}" in
       transport) exit 22 ;;
       malformed) echo '{not json' ;;
       *) printf '{"listings":[{"language":"en-US","title":"Fixture listing"}]}\n' ;;
@@ -34,15 +37,21 @@ ASC_STATUS=0 bash "$SCRIPT" apple > "$T/out" 2>&1
 grep -q '^Done\.' "$T/out"
 for mode in transport malformed; do
   : > "$CALLS"
-  if LISTINGS_MODE="$mode" bash "$SCRIPT" google > "$T/out" 2>&1; then
+  if LISTINGS_MODE="$mode" bash "$SCRIPT" google --allow-play-edit > "$T/out" 2>&1; then
     echo "Play pull hid a $mode failure"; exit 1
   fi
   if grep -q '^Done\.' "$T/out"; then echo 'FAIL a failed pull still printed Done'; exit 1; fi
   test "$(cat "$CALLS")" = delete
 done
 : > "$CALLS"
-LISTINGS_MODE=good bash "$SCRIPT" google > "$T/out" 2>&1
+LISTINGS_MODE=good bash "$SCRIPT" google --allow-play-edit > "$T/out" 2>&1
 test "$(cat "$DIR/en-US/name.txt")" = 'Fixture listing'
 test "$(cat "$CALLS")" = delete
-grep -q '^Done\.' "$T/out"
+grep -q '^Retrieval finished\.' "$T/out"
+if bash "$SCRIPT" google > "$T/out" 2>&1; then echo 'Play pull ran without edit authorization'; exit 1; fi
+grep -q 'allow-play-edit' "$T/out"
+if LISTINGS_MODE=good DELETE_STATUS=22 bash "$SCRIPT" google --allow-play-edit > "$T/out" 2>&1; then
+  echo 'Play pull hid a cleanup failure'; exit 1
+fi
+grep -q 'Could not delete temporary edit' "$T/out"
 echo 'pull-metadata-test: Apple and Play failures propagate; both successful paths still work; temporary Play edits are deleted.'

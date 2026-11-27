@@ -2,12 +2,13 @@
 """Install the guard, skill and audit command into every supported AI coding tool other than Claude Code.
 Usage. install_harness.py <tool> [install|doctor|uninstall] [--dry-run] [--repo DIR]. Configs are merged, never replaced."""
 
+import filecmp
 import fnmatch
 import json
-import filecmp
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUARD_NAME = "app-store-compliance-guard.sh"
+BUNDLED_GUARD = os.path.join("agent-os", "hooks", GUARD_NAME)
 PAYLOAD_DIRS = ("docs", "data", "references", "templates", "scripts")
 SUBMIT = "fast" + "lane deliver"
 PROBLEMS = []
@@ -217,6 +219,66 @@ def layout(tool, repo_dir=None):
     }
 
 
+def check_path(path, selected_root):
+    """Reject redirection below a user-selected root before reading or writing."""
+    root = os.path.abspath(selected_root)
+    dest = os.path.abspath(path)
+    if os.path.normcase(os.path.commonpath((root, dest))) != os.path.normcase(root):
+        raise ValueError(f"path is outside the selected install root: {path}")
+    current = root
+    for part in os.path.relpath(dest, root).split(os.sep):
+        if part == ".":
+            continue
+        current = os.path.join(current, part)
+        try:
+            entry = os.lstat(current)
+        except FileNotFoundError:
+            break
+        reparse = getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if stat.S_ISLNK(entry.st_mode) or reparse:
+            raise ValueError(f"linked install path: {current}")
+        if not (stat.S_ISREG(entry.st_mode) or stat.S_ISDIR(entry.st_mode)):
+            raise ValueError(f"unsupported install file type: {current}")
+        if stat.S_ISREG(entry.st_mode) and entry.st_nlink > 1:
+            raise ValueError(f"hard-linked install file: {current}")
+
+
+def install_paths(tool, lay, guard, repo_dir):
+    overrides = {
+        "codex": "CODEX_HOME", "copilot": "COPILOT_HOME",
+        "qwen": "QWEN_HOME", "kimi": "KIMI_CODE_HOME", "opencode": "XDG_CONFIG_HOME",
+    }
+    if tool == "copilot-repo":
+        root = repo_dir
+    elif tool in overrides and os.environ.get(overrides[tool]):
+        root = os.path.dirname(lay["hooks"])
+    else:
+        root = home()
+    paths = [(path, root) for path in (lay["hooks"], lay["config"], lay["command"], guard) if path]
+    if tool == "opencode":
+        paths.append((legacy_plugin(lay), root))
+    if tool == "kimi":
+        paths.append((os.path.join(lay["hooks"], KIMI_SEP_FILE), root))
+    if tool != "copilot-repo":
+        sk = skill_dir(tool)
+        paths.extend((os.path.join(sk, part), home()) for part in (
+            "SKILL.md", "VERSION", ".citation-allowlist", ".installed-by", ".guards",
+            BUNDLED_GUARD, *PAYLOAD_DIRS,
+        ))
+    return paths
+
+
+def check_claude_paths(root):
+    root = os.path.abspath(root)
+    if os.path.lexists(root):
+        check_path(root, os.path.dirname(root))
+    for rel in ("hooks/" + GUARD_NAME, "commands/app-store-audit.md", "settings.json",
+                *("skills/app-store-compliance/" + part for part in
+                  ("SKILL.md", "VERSION", ".citation-allowlist", BUNDLED_GUARD, *PAYLOAD_DIRS))):
+        check_path(os.path.join(root, rel), root)
+
+
+
 def has_hooks_key(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -287,18 +349,20 @@ def load_json(path):
 def write_atomic(path, text, newline=None):
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
-    real = os.path.realpath(path)
-    if os.path.exists(real):
-        shutil.copy2(
-            real,
-            path + ".bak-" + time.strftime("%Y%m%d-%H%M%S") + "-" + str(os.getpid()),
-        )
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real) or folder, prefix=".asc-")
-    with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
-        f.write(text)
-    if os.path.exists(real):
-        shutil.copymode(real, tmp)
-    os.replace(tmp, real)
+    if os.path.exists(path):
+        fd, backup = tempfile.mkstemp(dir=folder, prefix=os.path.basename(path) + ".bak-")
+        os.close(fd)
+        shutil.copy2(path, backup)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".asc-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
+            f.write(text)
+        if os.path.exists(path):
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def events(tool):
@@ -598,8 +662,6 @@ def manual_block(tool, lay, cmd):
         )
     events_map = {ev: [new_entry(tool, st, cmd)] for ev, st in events(tool)}
     data = {"hooks": events_map} if lay["wrap"] else events_map
-    if tool == "gemini":
-        data["tools"] = {"enableHooks": True}
     if tool in ("cursor", "copilot", "copilot-repo"):
         data["version"] = 1
     return (
@@ -655,13 +717,6 @@ def register(tool, lay, guard, dry):
     if tool in ("copilot", "copilot-repo") and not (type(data.get("version")) is int and data.get("version") == 1):
         data["version"] = 1
         fixed = True
-    if tool == "gemini" and not isinstance(data.setdefault("tools", {}), dict):
-        fail(
-            shown(lay["config"])
-            + " has a tools key that is not an object. It was not changed."
-        )
-        print(manual_block(tool, lay, cmd))
-        return False
     box = container(lay, data)
     changed = fixed
     for ev, st in events(tool):
@@ -678,11 +733,6 @@ def register(tool, lay, guard, dry):
             groups[:] = without_ours(st, groups, cmd, guard)
             groups.append(new_entry(tool, st, cmd))
             changed = True
-    if tool == "gemini" and data["tools"].get("enableHooks") is not True:
-        data["tools"]["enableHooks"] = (
-            True  # Gemini CLI before 0.26 runs no hook without this
-        )
-        changed = True
     if not changed:
         ok("hook already registered in " + shown(lay["config"]))
         return True
@@ -783,8 +833,7 @@ def register_kimi(lay, cmd, dry):
         return False
     write_atomic(path, text + sep + kimi_block(cmd).replace("\n", nl), newline="")
     os.makedirs(lay["hooks"], exist_ok=True)
-    with open(os.path.join(lay["hooks"], KIMI_SEP_FILE), "w", encoding="utf-8") as f:
-        f.write(json.dumps(sep))
+    write_atomic(os.path.join(lay["hooks"], KIMI_SEP_FILE), json.dumps(sep))
     ok(
         "hook appended to "
         + shown(path)
@@ -988,10 +1037,13 @@ def unregister(tool, lay, guard):
         sep_file = os.path.join(lay["hooks"], KIMI_SEP_FILE)
         try:
             with open(sep_file, encoding="utf-8") as f:
-                sep = json.loads(f.read() or '""')
+                sep = json.loads(f.read(24) or '""')
         except (OSError, ValueError):
             sep = ""
-        sep = "\n" * sep if isinstance(sep, int) else (sep if isinstance(sep, str) else "")
+        if type(sep) is int and 0 <= sep <= 2:
+            sep = "\n" * sep
+        if not isinstance(sep, str) or sep not in ("", "\n", "\n\n", "\r\n", "\r\n\r\n"):
+            sep = ""
         # Drop only the newlines the install added in front of a block it appended at the end.
         if sep and not after and before.endswith(sep):
             before = before[: -len(sep)]
@@ -1093,6 +1145,9 @@ def copy_payload(tool, lay, guard):
                 os.path.join(sk, d),
                 ignore=shutil.ignore_patterns("__pycache__"),
             )
+        bundled = os.path.join(sk, BUNDLED_GUARD)
+        os.makedirs(os.path.dirname(bundled), exist_ok=True)
+        shutil.copy2(os.path.join(REPO, BUNDLED_GUARD), bundled)
         write_owners(tool, read_owners(tool) | {tool})
         write_guards(tool, dict(read_guards(tool), **{guard: tool}))
     os.makedirs(lay["hooks"], exist_ok=True)
@@ -1255,6 +1310,7 @@ def verify(tool, lay, guard, repo_dir):
             "scripts/deadline-checker.py",
             "scripts/validate-privacy-manifest.py",
             ".citation-allowlist",
+            BUNDLED_GUARD,
         )
         missing = [p for p in need if not os.path.exists(os.path.join(sk, p))]
         if missing:
@@ -1303,7 +1359,7 @@ def verify(tool, lay, guard, repo_dir):
         )
         return 1
     if UNVERIFIED:
-        print("Installed, but not fully verified. " + "; ".join(UNVERIFIED) + ". Install node and run doctor to verify.")
+        print("Installed, but not fully verified. " + "; ".join(UNVERIFIED) + ".")
     else:
         print("Install verified.")
     if tool != "copilot-repo":
@@ -1424,12 +1480,9 @@ def check_hooks(tool, lay, guard, app, repo_dir):
         fail("hooksConfig.enabled is false in " + shown(lay["config"]) + ", so Gemini CLI runs no hook, the guard included")
     if tool in ("qwen", "copilot", "copilot-repo") and data.get("disableAllHooks") is True:
         fail("disableAllHooks is true in " + shown(lay["config"]) + ", so the tool runs no hook, the guard included")
-    if tool == "gemini" and (data.get("tools") or {}).get("enableHooks") is not True:
-        fail(
-            "tools.enableHooks is not true in "
-            + shown(lay["config"])
-            + ", so Gemini CLI before 0.26 runs no hook"
-        )
+    settings = data.get("tools")
+    if tool == "gemini" and (not isinstance(settings, dict) or settings.get("enableHooks") is not True):
+        UNVERIFIED.append("Gemini host activation was not confirmed. The installer preserved tools.enableHooks")
 
 
 def prove(line, tool, style, app, run_dir):
@@ -1555,10 +1608,16 @@ def main(argv):
         return 2
     lay = layout(tool, repo_dir)
     guard = os.path.join(lay["hooks"], GUARD_NAME)
+    if mode == "doctor" and dry:
+        print("Dry run. No installed commands were executed.")
+        return 0
+    try:
+        for path, root in install_paths(tool, lay, guard, repo_dir):
+            check_path(path, root)
+    except (OSError, ValueError) as error:
+        fail(f"Cannot use this install layout. {error}")
+        return 1
     if mode == "doctor":
-        if dry:
-            print("Dry run. No installed commands were executed.")
-            return 0
         return verify(tool, lay, guard, repo_dir)
     if mode == "uninstall":
         return uninstall(tool, lay, guard, dry)
@@ -1578,10 +1637,16 @@ def main(argv):
     print("Installing the App Store Compliance Playbook for " + SPECS[tool]["name"])
     copy_payload(tool, lay, guard)
     if not register(tool, lay, guard, False):
-        verify(tool, lay, guard, repo_dir)
         return 1
     return verify(tool, lay, guard, repo_dir)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-claude-paths":
+        try:
+            check_claude_paths(sys.argv[2])
+        except (OSError, ValueError) as error:
+            fail(f"Cannot use this install layout. {error}")
+            sys.exit(1)
+        sys.exit(0)
     sys.exit(main(sys.argv[1:]))

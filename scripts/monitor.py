@@ -536,49 +536,49 @@ def clean_xml_tag(tag):
     return tag
 
 
-def fetch_apple_rss(url=None, verbose=False):
-    url = url or os.environ.get(
-        "APPLE_NEWS_RSS_URL", "https://developer.apple.com/news/rss/news.rss"
-    )
-    if verbose:
-        print(f"[*] Fetching Apple Developer News from {url}...")
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read()
-        return content.decode("utf-8")
-    except Exception as e:
-        if verbose:
-            print(
-                f"[!] Warning: Failed to fetch live RSS: {e}. Falling back to default data."
-            )
+APPLE_NEWS_RSS_URL = "https://developer.apple.com/news/rss/news.rss"
+MAX_RSS_BYTES = 2 * 1024 * 1024
+SOURCE_DESCRIPTIONS = {
+    "sample": "built-in sample announcements",
+    "simulated": "simulated announcements",
+    "local_file": "announcements from the supplied file",
+    "apple_live": "Apple Developer News RSS, fetched for this run",
+}
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
-def parse_rss_items(xml_str):
-    if not xml_str:
-        return []
-    try:
-        root = ET.fromstring(xml_str)
-        items = []
-        # Find all <item> tags regardless of namespaces
-        for el in root.iter():
-            tag = clean_xml_tag(el.tag)
-            if tag == "item":
-                item_dict = {}
-                for child in el:
-                    ctag = clean_xml_tag(child.tag)
-                    if ctag in ["title", "description", "link", "pubDate"]:
-                        item_dict[ctag] = child.text
-                if item_dict:
-                    items.append(item_dict)
-        return items
-    except Exception as e:
-        print(f"[!] Error parsing RSS XML: {e}")
-        return []
+def fetch_apple_rss():
+    opener = urllib.request.build_opener(NoRedirects())
+    with opener.open(APPLE_NEWS_RSS_URL, timeout=10) as response:
+        content = response.read(MAX_RSS_BYTES + 1)
+    if len(content) > MAX_RSS_BYTES:
+        raise ValueError("Apple Developer News RSS exceeded the response size limit")
+    return content
+
+
+def parse_rss_items(xml_str, *, require_rss=False):
+    root = ET.fromstring(xml_str)
+    if require_rss and (
+        clean_xml_tag(root.tag) != "rss"
+        or not any(clean_xml_tag(child.tag) == "channel" for child in root)
+    ):
+        raise ValueError("expected an RSS document")
+    items = []
+    for el in root.iter():
+        if clean_xml_tag(el.tag) != "item":
+            continue
+        item = {
+            clean_xml_tag(child.tag): child.text or ""
+            for child in el
+            if clean_xml_tag(child.tag) in ("title", "description", "link", "pubDate")
+        }
+        if item.get("title"):
+            items.append(item)
+    return items
 
 
 def scan_target_repo(repo_path, track_name, metadata):
@@ -991,9 +991,9 @@ def generate_pull_request(track_name, affected_files, item_title):
 def run_monitor(
     project_path=".",
     simulate_track=None,
-    use_mock=False,
     custom_news_file=None,
     verbose=False,
+    live=False,
 ):
     """
     Main runner for the requirements monitor.
@@ -1001,8 +1001,9 @@ def run_monitor(
     announcements = []
 
     if simulate_track:
+        source = "simulated"
         if verbose:
-            print(f"[*] Simulating update for track: {simulate_track}")
+            print(f"[*] Simulating update for track: {simulate_track}", file=sys.stderr)
         # Build simulated announcements
         if simulate_track == "all":
             for track_name in TRACK_METADATA:
@@ -1043,41 +1044,27 @@ def run_monitor(
                 )
 
     elif custom_news_file:
+        source = "local_file"
         if verbose:
-            print(f"[*] Loading announcements from custom file: {custom_news_file}")
-        try:
-            with open(custom_news_file, "r", encoding="utf-8") as f:
-                if custom_news_file.endswith(".json"):
-                    announcements = json.load(f)
-                else:
-                    announcements = parse_rss_items(f.read())
-        except Exception as e:
-            print(f"[!] Error reading custom news file {custom_news_file}: {e}")
-            sys.exit(1)
+            print(f"[*] Loading announcements from custom file: {custom_news_file}", file=sys.stderr)
+        with open(custom_news_file, "r", encoding="utf-8") as f:
+            if custom_news_file.endswith(".json"):
+                announcements = json.load(f)
+            else:
+                announcements = parse_rss_items(f.read())
 
-    elif use_mock:
-        if verbose:
-            print("[*] Using pre-defined mock Apple Developer announcements...")
-        announcements = MOCK_ANNOUNCEMENTS
+    elif live:
+        source = "apple_live"
+        announcements = parse_rss_items(fetch_apple_rss(), require_rss=True)
 
     else:
-        # Fetch live
-        rss_content = fetch_apple_rss(verbose=verbose)
-        if rss_content:
-            announcements = parse_rss_items(rss_content)
-        else:
-            print(
-                "monitor. Apple's news feed could not be reached. The items below are sample "
-                "announcements, not real ones. Check your network and run again.",
-                file=sys.stderr,
-            )
-            announcements = MOCK_ANNOUNCEMENTS
+        source = "sample"
+        announcements = MOCK_ANNOUNCEMENTS
 
     if verbose:
-        print(f"[*] Loaded {len(announcements)} developer announcements.")
+        print(f"[*] Loaded {len(announcements)} developer announcements.", file=sys.stderr)
 
     report_items = []
-    processed_tracks = set()
 
     for item in announcements:
         matched_tracks = match_announcement_to_tracks(item)
@@ -1085,13 +1072,13 @@ def run_monitor(
             continue
 
         for track in matched_tracks:
-            processed_tracks.add(track)
             meta = TRACK_METADATA[track]
             affected_files, scan_verdict = scan_target_repo(project_path, track, meta)
             pr_details = generate_pull_request(track, affected_files, item["title"])
 
             report_items.append(
                 {
+                    "data_source": source,
                     "announcement_title": item["title"],
                     "announcement_pubDate": item.get("pubDate", ""),
                     "announcement_link": item.get("link", ""),
@@ -1105,17 +1092,18 @@ def run_monitor(
                 }
             )
 
-    return report_items, processed_tracks
+    return report_items, source
 
 
 REPORT_LIMIT = 10
 
 
-def print_text_report(report_items, project_path, full=True):
+def print_text_report(report_items, project_path, source, full=True):
     print("=" * 80)
     print("                  APPLE DEVELOPER REQUIREMENTS MONITOR REPORT")
     print(f" Target Project: {os.path.abspath(project_path)}")
     print(f" Date Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Data. {SOURCE_DESCRIPTIONS[source]}.")
     print("=" * 80)
 
     if not report_items:
@@ -1180,15 +1168,19 @@ def main():
         default=".",
         help="Path to target mobile app project root (default: current directory)",
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "--simulate",
         help="Simulate an update by track name (e.g., 'Privacy Manifests') or 'all' to simulate all 25 tracks",
     )
-    parser.add_argument(
-        "--mock", action="store_true", help="Force using mock pre-defined announcements"
+    source.add_argument(
+        "--mock", action="store_true", help="Use built-in sample announcements (default)"
     )
-    parser.add_argument(
+    source.add_argument(
         "--news-file", help="Path to a custom XML or JSON file containing announcements"
+    )
+    source.add_argument(
+        "--live", action="store_true", help="Fetch the public Apple Developer News RSS feed"
     )
     parser.add_argument(
         "--json", action="store_true", help="Output report in JSON format"
@@ -1206,19 +1198,27 @@ def main():
 
     args = parser.parse_args()
 
-    report_items, processed = run_monitor(
-        project_path=args.project,
-        simulate_track=args.simulate,
-        use_mock=args.mock,
-        custom_news_file=args.news_file,
-        verbose=args.verbose,
-    )
+    try:
+        report_items, source = run_monitor(
+            project_path=args.project,
+            simulate_track=args.simulate,
+            custom_news_file=args.news_file,
+            verbose=args.verbose,
+            live=args.live,
+        )
+    except (OSError, ValueError, ET.ParseError) as exc:
+        if args.live:
+            print(f"monitor. The live Apple Developer News check failed. {exc}", file=sys.stderr)
+        else:
+            print(f"monitor. Could not load the supplied announcements. {exc}", file=sys.stderr)
+        return 1
 
     if args.json:
         print(json.dumps(report_items, indent=2))
     else:
-        print_text_report(report_items, args.project, full=args.full)
+        print_text_report(report_items, args.project, source, full=args.full)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

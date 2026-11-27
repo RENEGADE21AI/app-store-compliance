@@ -11,7 +11,7 @@ Fair question, and stars prove nothing. Check it yourself in a few minutes.
 - The guard is one Bash file. It reads your project, uses temporary scan buffers that it removes, makes no network call, and never changes your app. Errors and overrides are written to standard error. The guard loads no separate logging script.
 - `scripts/install.sh` writes into `~/.claude` (or `$CLAUDE_CONFIG_DIR`). the hook, the skill folder, one command file, and a hook entry in `settings.json`. It backs up `settings.json` first as `settings.json.bak-<timestamp>`.
 - `bash scripts/install.sh install --dry-run` prints every change and writes nothing. `doctor` checks the install, `uninstall` removes it.
-- Neither the installer nor the guard calls curl or wget. `scripts/monitor.py` fetches Apple's public developer feed by default; pass `--mock`, `--simulate` or `--news-file` to stay offline. The Android, AI policy and privacy monitors fetch only with `--live`.
+- Neither the installer nor the guard calls curl or wget. The Apple, Android, AI policy and privacy monitors fetch feeds only with `--live`.
 - Want more isolation? Run it in a container or a VM.
 
 Section 8 of `docs/WHAT-THE-SCAN-PROVES.md` lists what each script touches.
@@ -151,7 +151,7 @@ It checks a dated snapshot, and tells you how old it is.
 - Every report opens with a `Rule pack.` line, the version and the oldest and newest date its sources were verified. Past 60 days it prints `Rule pack STALE`.
 - Every deadline in `data/regulatory-deadlines.json` records its source URL and the day it was verified, and its `source_note` says plainly when the source is secondary or the primary text was not read. `scripts/verify-citations.py --online` checks that cited pages respond and are not soft 404s, and reports blocked or failing pages for follow-up.
 - New rules have shipped within days. 2.5.0 added Apple's November developer emails, and 2.5.1 adds Apple's China mainland compliance declarations.
-- To update, run `git pull` in the repo, then the same install command again.
+- To update, review the incoming revision, run `git pull` in the repo, then run the same install command again.
 
 There is no scheduled job that rewrites rules automatically, on purpose. Every change is read by a person first.
 

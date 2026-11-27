@@ -454,12 +454,26 @@ check_claude_destinations() {
   esac
   have jq -n true || { fail "Python 3 or jq is required for a checked install."; return 1; }
   local p
-  for p in "$CONF" "$SETTINGS" "$CONF/hooks" "$GUARD" "$CONF/commands" "$CMD_FILE" \
-    "$CONF/skills" "$SKILL" "$SKILL/SKILL.md" "$SKILL/VERSION" "$SKILL/.citation-allowlist" \
-    "$SKILL/agent-os" "$SKILL/agent-os/hooks" "$SKILL/agent-os/hooks/$GUARD_NAME" \
+  for p in "$CONF" "$CONF/hooks" "$CONF/commands" "$CONF/skills" "$SKILL" \
+    "$SKILL/agent-os" "$SKILL/agent-os/hooks" \
     "$SKILL/docs" "$SKILL/data" "$SKILL/references" "$SKILL/templates" "$SKILL/scripts"; do
+    if [ -L "$p" ]; then
+      fail "Cannot use this install layout. Linked install path: $p"
+      return 1
+    fi
+    if [ -e "$p" ] && [ ! -d "$p" ]; then
+      fail "Cannot use this install layout. Expected an install directory: $p"
+      return 1
+    fi
+  done
+  for p in "$SETTINGS" "$GUARD" "$CMD_FILE" "$SKILL/SKILL.md" "$SKILL/VERSION" \
+    "$SKILL/.citation-allowlist" "$SKILL/agent-os/hooks/$GUARD_NAME"; do
     if [ -L "$p" ] || { [ -f "$p" ] && [ -n "$(find "$p" -prune -links +1 -print 2>/dev/null)" ]; }; then
       fail "Cannot use this install layout. Linked install path: $p"
+      return 1
+    fi
+    if [ -e "$p" ] && [ ! -f "$p" ]; then
+      fail "Cannot use this install layout. Expected a regular install file: $p"
       return 1
     fi
   done

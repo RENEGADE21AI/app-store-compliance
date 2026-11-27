@@ -14,6 +14,7 @@ cat > "$T/bin/curl" <<'CURL'
 read -r header
 [ "$header" = "Authorization: Bearer fixture" ] || exit 98
 [ -z "${GOOGLE_ACCESS_TOKEN:-}" ] || exit 98
+[ -z "${TOKEN+x}" ] || exit 98
 case "$*" in
   *'-X POST '*) printf '{"id":"fixture-edit"}\n' ;;
   *'-X DELETE '*) printf 'delete\n' >> "$CALLS"; exit "${DELETE_STATUS:-0}" ;;
@@ -29,6 +30,7 @@ CURL
 chmod +x "$T/bin/asc" "$T/bin/curl"
 export PATH="$T/bin:$PATH" HOME="$T/home" DIR="$T/output" CALLS="$T/calls"
 export APP_ID=fixture VERSION=fixture PACKAGE_NAME=com.example.fixture GOOGLE_ACCESS_TOKEN=fixture
+export TOKEN=unrelated-fixture
 if ASC_STATUS=9 bash "$SCRIPT" apple > "$T/out" 2>&1; then
   echo 'Apple pull hid a failed asc command'; exit 1
 fi

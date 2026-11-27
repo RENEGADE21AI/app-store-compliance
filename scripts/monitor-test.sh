@@ -39,7 +39,7 @@ printf "import SwiftUI\nlet swiftVersion = 6.0\nTask { @MainActor in print(\"asy
 
 # Run monitor pointing to the temp directory simulating Swift requirements
 OUT_SCAN="$($MONITOR --project "$T" --simulate "Swift requirements" 2>&1)"
-grep -q "Sources/App.swift" <<<"$OUT_SCAN" && ok "repo scanner correctly identifies affected source file" || bad "repo scanner affected file"
+grep -Eq 'Sources[/\\]App\.swift' <<<"$OUT_SCAN" && ok "repo scanner correctly identifies affected source file" || bad "repo scanner affected file"
 
 # Clean up
 rm -rf "$T"
@@ -52,9 +52,10 @@ nums = [int(n) for n in re.findall(r'^## (\d+)\. ', body, re.M)]
 assert nums == list(range(1, 16)), nums
 " 2>/dev/null && ok "proposed pull request has sections 1 to 15 in order" || bad "numbered PR sections"
 
-# 6. Mock announcements fallback or manual trigger
+# 6. Explicit sample mode and the offline default
 OUT_MOCK="$($MONITOR --mock 2>&1)"
-grep -q "TRACK UPDATE: \[Privacy Manifests\]" <<<"$OUT_MOCK" && ok "mock announcements fallback runs and matches tracks" || bad "mock announcements"
+grep -q "TRACK UPDATE: \[Privacy Manifests\]" <<<"$OUT_MOCK" && ok "mock announcements match tracks" || bad "mock announcements"
+$MONITOR --json --verbose 2>/dev/null | python3 -c 'import json, sys; items = json.load(sys.stdin); assert items and {i["data_source"] for i in items} == {"sample"}' && ok "default JSON labels sample announcements" || bad "default sample provenance"
 
 # A long live report is cut to a readable first screen. --full prints every item.
 T="$(mktemp -d)"
@@ -67,10 +68,41 @@ N="$($MONITOR --project "$T" --news-file "$T/news.json" --full 2>&1 | grep -c 'T
 [ "$N" -ge 40 ] && ok "--full prints every item" || bad "--full prints every item (got $N)"
 N="$($MONITOR --project "$T" --news-file "$T/news.json" --json 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 [ "$N" -ge 40 ] && ok "--json is never cut" || bad "--json is never cut (got $N)"
-# A failed live fetch must say the items shown are samples, on stderr so --json stays parseable.
-ERR="$(APPLE_NEWS_RSS_URL="http://127.0.0.1:9/none.rss" $MONITOR --project "$T" --json 2>&1 >/dev/null)"
-grep -q "sample announcements" <<<"$ERR" && ok "a failed live fetch says the items are samples" || bad "a failed live fetch says the items are samples"
-APPLE_NEWS_RSS_URL="http://127.0.0.1:9/none.rss" $MONITOR --project "$T" --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' && ok "--json stays valid when the fetch fails" || bad "--json stays valid when the fetch fails"
+python3 - "$HERE" "$T" <<'PY' && ok "network opt-in, capped Apple RSS, and explicit live failures" || bad "Apple RSS trust boundary"
+import contextlib, importlib.util, io, os, sys
+from unittest.mock import MagicMock, patch
+from urllib.error import URLError
+
+scripts, project = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("mon", os.path.join(scripts, "monitor.py"))
+mon = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mon)
+with patch.object(mon, "fetch_apple_rss", side_effect=URLError("fixture unavailable")) as fetch:
+    assert mon.run_monitor(project)[1] == "sample"
+    fetch.assert_not_called()
+    out, err = io.StringIO(), io.StringIO()
+    with patch.object(sys, "argv", ["monitor.py", "--live", "--json", "--project", project]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        assert mon.main() == 1
+    assert not out.getvalue() and "live Apple Developer News check failed" in err.getvalue()
+
+opener = MagicMock()
+response = opener.open.return_value.__enter__.return_value
+response.read.return_value = b"<rss><channel><item><title>Privacy manifest update</title></item></channel></rss>"
+with patch.object(mon.urllib.request, "build_opener", return_value=opener) as factory:
+    items, source = mon.run_monitor(project, live=True)
+    assert source == "apple_live" and items[0]["data_source"] == source
+    handler = factory.call_args.args[0]
+    assert handler.redirect_request(None, None, 302, "", {}, "https://example.invalid/") is None
+    opener.open.assert_called_once_with("https://developer.apple.com/news/rss/news.rss", timeout=10)
+    response.read.assert_called_once_with(mon.MAX_RSS_BYTES + 1)
+    response.read.return_value = b"x" * (mon.MAX_RSS_BYTES + 1)
+    try:
+        mon.fetch_apple_rss()
+    except ValueError as exc:
+        assert "size limit" in str(exc)
+    else:
+        raise AssertionError("oversized RSS accepted")
+PY
 rm -rf "$T"
 
 # Atom text fields are plain text unless type says html or xhtml (RFC 4287 3.1.1). RSS stays HTML.

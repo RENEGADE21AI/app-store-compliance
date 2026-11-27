@@ -52,6 +52,20 @@ class InstallSafety(unittest.TestCase):
             harness.check_path(target, self.root)
         self.assertEqual(original.read_text(encoding="utf-8"), "{}")
 
+    def test_directory_at_managed_file_path_is_rejected(self):
+        settings = self.root / "settings.json"
+        settings.mkdir()
+        with self.assertRaisesRegex(ValueError, "expected a regular install file"):
+            harness.check_claude_paths(self.root)
+        self.assertEqual(list(settings.iterdir()), [])
+
+    def test_file_at_managed_directory_path_is_rejected(self):
+        hooks = self.root / "hooks"
+        hooks.write_text("fixture", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "expected an install directory"):
+            harness.check_claude_paths(self.root)
+        self.assertEqual(hooks.read_text(encoding="utf-8"), "fixture")
+
     def test_gemini_preserves_global_hook_opt_out(self):
         with patch.dict(os.environ, {"HOME": str(self.root)}):
             layout = harness.layout("gemini")

@@ -51,7 +51,7 @@ app highonly 0 "$HIGHONLY"; fleet highonly
 has "fix. Remove NSAllowsArbitraryLoads" && has "file. ios/App/Info.plist" && ok || bad "every finding prints with file and fix"
 
 # Readiness. Unknown is never success.
-python3 -c "import json;print(json.dumps({'apps':[{'name':'clean','path':'$T/clean'}]}))" > "$T/fleet.json"
+python3 -c 'import json, sys; print(json.dumps({"apps": [{"name": "clean", "path": sys.argv[1]}]}))' "$T/clean" > "$T/fleet.json"
 [ "$(run)" = 3 ] && has "readiness not tracked" && ok || bad "missing readiness is an owner action, exit 3"
 fleet "clean::{\"a\": true, \"play_data_safety_matches_runtime\": false}"
 [ "$(run)" = 3 ] && has "owner action. play_data_safety_matches_runtime" && ok || bad "false readiness is an owner action"
@@ -119,9 +119,32 @@ fleet clean; waiver "${W/APPNAME/clean}"; run --waivers "$T/w.json" >/dev/null
 has "retire this waiver" && ok || bad "stale waiver is reported"
 fleet blocked; waiver "${W/APPNAME/other}"
 [ "$(run --waivers "$T/w.json")" = 2 ] && ok || bad "a waiver for another app never applies"
-waiver "$(echo "${W/APPNAME/blocked}" | sed 's/2027-01-01/2026-11-01/')"
-FLEET_SWEEP_TESTING=0 FLEET_SWEEP_TEST_TODAY=2026-10-31 python3 "$SWEEP" "$T/fleet.json" --no-register --waivers "$T/w.json" >/dev/null 2>&1
-[ $? = 2 ] && ok || bad "the clock cannot be moved outside the test suite"
+FLEET_SWEEP_TESTING=0 FLEET_SWEEP_TEST_TODAY=2026-10-31 python3 - "$SWEEP" "$T/fleet.json" <<'PY' && ok || bad "normal runs use the real clock and bundled guard"
+import datetime as dt
+import importlib.util
+import os
+import subprocess
+import sys
+from unittest.mock import patch
+
+script, fleet = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("fleet_sweep", script)
+sweep = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sweep)
+
+def inspect_inputs(app, guard, waivers, today, timeout, register):
+    assert guard == sweep.DEFAULT_GUARD
+    assert today == dt.date.today()
+    return {"verdict": "READY"}
+
+with patch.object(sys, "argv", [script, fleet, "--no-register"]), patch.object(sweep, "sweep_app", inspect_inputs), patch.object(sweep, "print_report"):
+    assert sweep.main() == 0
+
+startup = {"BASH_ENV": "fixture", "ENV": "fixture", "CDPATH": "fixture"}
+with patch.dict(os.environ, startup), patch.object(sweep.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "")) as run:
+    sweep.run_guard(sweep.DEFAULT_GUARD, fleet, 2)
+    assert run.call_args.kwargs["env"].keys().isdisjoint(startup)
+PY
 
 # Inputs are validated before any guard runs (Codex findings 3 and 11).
 python3 -c "import json;print(json.dumps({'apps':[{'name':'A','path':'$T/clean'},{'name':'A','path':'$T/blocked'}]}))" > "$T/fleet.json"

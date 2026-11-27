@@ -60,13 +60,16 @@ def is_text(value):
 
 def run_guard(guard, app_path, timeout):
     """Returns (exit_code, stdout). exit_code None means the guard did not finish."""
+    env = {**os.environ, "APP_STORE_GUARD_OK": "0"}
+    for startup_setting in ("BASH_ENV", "ENV", "CDPATH"):
+        env.pop(startup_setting, None)
     try:
         done = subprocess.run(
             ["bash", str(guard), str(app_path)],
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "APP_STORE_GUARD_OK": "0"},
+            env=env,
         )
         return done.returncode, done.stdout
     except subprocess.TimeoutExpired as exc:
@@ -534,14 +537,15 @@ def main():
         print(f"fleet-sweep. {exc}", file=sys.stderr)
         return 1
 
-    # The clock can only be moved in the test suite, so an expired waiver cannot be revived from the CLI.
-    fake = os.environ.get("FLEET_SWEEP_TEST_TODAY")
-    today = (
-        dt.date.fromisoformat(fake)
-        if fake and os.environ.get("FLEET_SWEEP_TESTING") == "1"
-        else dt.date.today()
-    )
-    guard = Path(os.environ.get("FLEET_SWEEP_GUARD", DEFAULT_GUARD))
+    # Test fixtures can substitute the clock and guard together.
+    testing = os.environ.get("FLEET_SWEEP_TESTING") == "1"
+    fake = os.environ.get("FLEET_SWEEP_TEST_TODAY") if testing else None
+    today = dt.date.fromisoformat(fake) if fake else dt.date.today()
+    test_guard = os.environ.get("FLEET_SWEEP_GUARD") if testing else None
+    guard = Path(test_guard) if test_guard else DEFAULT_GUARD
+    if not test_guard and (not guard.is_file() or guard.resolve() != guard):
+        print("fleet-sweep. The bundled guard is missing or resolves outside its installed path.", file=sys.stderr)
+        return 1
 
     results = [sweep_app(a, guard, waivers, today, args.timeout, register) for a in fleet["apps"]]
     verdict = max((r["verdict"] for r in results), key=RANK.get)

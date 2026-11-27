@@ -41,6 +41,7 @@ case "$target" in
     command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 1; }
     command -v python3 >/dev/null 2>&1 || { echo "python3 is required"; exit 1; }
     TOKEN="${GOOGLE_ACCESS_TOKEN:-}"
+    export -n TOKEN
     if [ -z "$TOKEN" ] || [[ "$TOKEN" == *$'\n'* || "$TOKEN" == *$'\r'* ]]; then
       echo "Supply a valid GOOGLE_ACCESS_TOKEN explicitly. It needs the androidpublisher scope and access to $PACKAGE_NAME." >&2
       exit 1

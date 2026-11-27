@@ -219,16 +219,24 @@ def layout(tool, repo_dir=None):
     }
 
 
-def check_path(path, selected_root):
-    """Reject redirection below a user-selected root before reading or writing."""
+def check_path(path, selected_root, *, directory=False):
+    """Reject redirection and mismatched destination types below a selected root."""
     root = os.path.abspath(selected_root)
     dest = os.path.abspath(path)
     if os.path.normcase(os.path.commonpath((root, dest))) != os.path.normcase(root):
         raise ValueError(f"path is outside the selected install root: {path}")
+    try:
+        if not stat.S_ISDIR(os.stat(root).st_mode):
+            raise ValueError(f"expected an install directory: {root}")
+    except FileNotFoundError:
+        return
+
+    relative = os.path.relpath(dest, root)
+    if relative == ".":
+        return
+    parts = relative.split(os.sep)
     current = root
-    for part in os.path.relpath(dest, root).split(os.sep):
-        if part == ".":
-            continue
+    for index, part in enumerate(parts):
         current = os.path.join(current, part)
         try:
             entry = os.lstat(current)
@@ -237,10 +245,14 @@ def check_path(path, selected_root):
         reparse = getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
         if stat.S_ISLNK(entry.st_mode) or reparse:
             raise ValueError(f"linked install path: {current}")
-        if not (stat.S_ISREG(entry.st_mode) or stat.S_ISDIR(entry.st_mode)):
-            raise ValueError(f"unsupported install file type: {current}")
-        if stat.S_ISREG(entry.st_mode) and entry.st_nlink > 1:
-            raise ValueError(f"hard-linked install file: {current}")
+        if directory or index < len(parts) - 1:
+            if not stat.S_ISDIR(entry.st_mode):
+                raise ValueError(f"expected an install directory: {current}")
+        else:
+            if not stat.S_ISREG(entry.st_mode):
+                raise ValueError(f"expected a regular install file: {current}")
+            if entry.st_nlink > 1:
+                raise ValueError(f"hard-linked install file: {current}")
 
 
 def install_paths(tool, lay, guard, repo_dir):
@@ -254,28 +266,32 @@ def install_paths(tool, lay, guard, repo_dir):
         root = os.path.dirname(lay["hooks"])
     else:
         root = home()
-    paths = [(path, root) for path in (lay["hooks"], lay["config"], lay["command"], guard) if path]
+    paths = [(lay["hooks"], root, True)]
+    paths.extend((path, root, False) for path in (lay["config"], lay["command"], guard) if path)
     if tool == "opencode":
-        paths.append((legacy_plugin(lay), root))
+        paths.append((legacy_plugin(lay), root, False))
     if tool == "kimi":
-        paths.append((os.path.join(lay["hooks"], KIMI_SEP_FILE), root))
+        paths.append((os.path.join(lay["hooks"], KIMI_SEP_FILE), root, False))
     if tool != "copilot-repo":
         sk = skill_dir(tool)
-        paths.extend((os.path.join(sk, part), home()) for part in (
+        paths.extend((os.path.join(sk, part), home(), False) for part in (
             "SKILL.md", "VERSION", ".citation-allowlist", ".installed-by", ".guards",
-            BUNDLED_GUARD, *PAYLOAD_DIRS,
+            BUNDLED_GUARD,
         ))
+        paths.extend((os.path.join(sk, part), home(), True) for part in PAYLOAD_DIRS)
     return paths
 
 
 def check_claude_paths(root):
     root = os.path.abspath(root)
     if os.path.lexists(root):
-        check_path(root, os.path.dirname(root))
+        check_path(root, os.path.dirname(root), directory=True)
     for rel in ("hooks/" + GUARD_NAME, "commands/app-store-audit.md", "settings.json",
                 *("skills/app-store-compliance/" + part for part in
-                  ("SKILL.md", "VERSION", ".citation-allowlist", BUNDLED_GUARD, *PAYLOAD_DIRS))):
+                  ("SKILL.md", "VERSION", ".citation-allowlist", BUNDLED_GUARD))):
         check_path(os.path.join(root, rel), root)
+    for part in PAYLOAD_DIRS:
+        check_path(os.path.join(root, "skills", "app-store-compliance", part), root, directory=True)
 
 
 
@@ -1612,8 +1628,8 @@ def main(argv):
         print("Dry run. No installed commands were executed.")
         return 0
     try:
-        for path, root in install_paths(tool, lay, guard, repo_dir):
-            check_path(path, root)
+        for path, root, directory in install_paths(tool, lay, guard, repo_dir):
+            check_path(path, root, directory=directory)
     except (OSError, ValueError) as error:
         fail(f"Cannot use this install layout. {error}")
         return 1

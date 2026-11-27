@@ -6,8 +6,9 @@ This fork is based on the [App Store Compliance Playbook](https://github.com/mjm
 - The fork removes inherited sponsor links, testimonials, website verification, mandatory upstream review assignments, automatic PR closure, and the workflow that rejects AI attribution. Copyright, citation records, and disclosure of material AI assistance remain available.
 - The guard writes its own diagnostics instead of loading the user's unrelated hook logger. It uses private temporary files and isolated Python. Its repository hook skips executable helper files from the app being scanned. If an optional helper is unavailable, the report names the missing coverage.
 - Executable helpers are checked against digests in the guard. The release audit uses the bundled guard or an explicitly supplied path. It does not discover executables from the installation registry.
-- Installation and removal check managed destinations for links. Gemini installation leaves global activation settings unchanged.
+- Installation and removal verify managed destination types and refuse links. Gemini installation leaves global activation settings unchanged.
 - Citation checks default to local collection. Listing URL requests are optional and scoped. The Google listing pull requires explicit approval of a temporary edit and an explicitly supplied token.
+- The Apple news monitor fetches the official feed only with `--live`. Reports identify their data source, and a failed live check exits with an error. Fleet sweeps use the bundled guard outside test mode. The Google listing pull keeps the authorization token out of the child-process environment.
 - Installation verification refuses to run a guard or OpenCode plugin whose contents differ from the checkout. A dry-run doctor command exits without running installed commands.
 - CI grants read-only repository contents access and does not leave the checkout credential available to tests.
 

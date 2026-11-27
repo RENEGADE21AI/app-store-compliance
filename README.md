@@ -212,11 +212,11 @@ bash ~/repositories/app-store-compliance/agent-os/hooks/app-store-compliance-gua
 
 Keep your projects in sync with Apple's continuously evolving requirements. The monitor tracks changes to 25 critical areas including App Store guidelines, privacy manifests, alternative payments, and child safety.
 
-Run a requirements check on your repository against the live Apple Developer RSS news feed. A long result opens with a count per track and shows the first 10 items. Add `--full` for every item. If the feed cannot be reached, the monitor says its items are samples.
+Pass `--live` to check the public Apple Developer News RSS feed. A long result shows a count per track and the first 10 items. Add `--full` for every item. A failed live check exits with an error.
 
 ```
 cd ~/repositories/app-store-compliance
-python3 scripts/monitor.py --project /path/to/your/app
+python3 scripts/monitor.py --project /path/to/your/app --live
 ```
 
 You can simulate specific tracking updates to generate concrete migration tasks, draft pull requests, and estimate release impact:
@@ -263,7 +263,7 @@ What to expect, measured on 30 September 2026.
 | `generate-timeline.py` | The open deadlines, then one completion line | Rewrites `docs/REGULATORY-TIMELINE.md` in the playbook folder |
 | `deadline-checker.py` | About 175 lines of detail. Add `--brief` for one line per open deadline | No |
 
-Every monitor prints one `Data.` line that says whether its items are live or sample. The monitors other than `monitor.py` read built-in sample announcements unless you pass `--live`, so treat that output as a worked example of the migration tasks, not as news. `monitor-regulatory.py` and `monitor-security.py` have no live feed.
+The monitors default to offline sample data and label the source in text reports. In the Apple monitor's JSON output, each matched item has a `data_source` field. `monitor-regulatory.py` and `monitor-security.py` have no live feed.
 
 ### Citation integrity
 
